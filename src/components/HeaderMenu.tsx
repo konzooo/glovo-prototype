@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRestaurantStore } from "@/lib/store";
 import { MODEL_OPTIONS } from "@/lib/ai/models";
 import { LlmSettingsModal } from "@/components/LlmSettingsModal";
@@ -60,6 +61,13 @@ export function HeaderMenu() {
             >
               LLM settings
             </button>
+            <Link
+              href="/performance"
+              onClick={() => setOpen(false)}
+              className="block w-full rounded px-2 py-1.5 text-left text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Performance
+            </Link>
           </div>
         )}
       </div>

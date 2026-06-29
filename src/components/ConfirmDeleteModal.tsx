@@ -7,17 +7,21 @@ export function ConfirmDeleteModal({
   onClose,
   itemName,
   onConfirm,
+  title = "Delete item",
+  entityLabel = "this item",
 }: {
   open: boolean;
   onClose: () => void;
   itemName: string;
   onConfirm: () => void;
+  title?: string;
+  entityLabel?: string;
 }) {
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="Delete item"
+      title={title}
       footer={
         <>
           <button
@@ -40,7 +44,7 @@ export function ConfirmDeleteModal({
         </>
       }
     >
-      Delete {itemName ? `"${itemName}"` : "this item"}? This can&apos;t be undone.
+      Delete {itemName ? `"${itemName}"` : entityLabel}? This can&apos;t be undone.
     </Modal>
   );
 }

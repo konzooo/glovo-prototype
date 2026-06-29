@@ -9,6 +9,7 @@ import { makeId } from "@/lib/id";
 import { ExtractionResponse } from "@/lib/ai/schema";
 import { SAMPLE_EXTRACTION } from "@/lib/sample-extraction";
 import { getModelOption } from "@/lib/ai/models";
+import { estimateExtractionMs, hasTimingHistory, recordExtractionDuration } from "@/lib/extraction-timing";
 
 type PendingFile = {
   id: string;
@@ -37,10 +38,13 @@ export default function AddRestaurantScreen() {
   const [restaurantName, setRestaurantName] = useState("");
   const [files, setFiles] = useState<PendingFile[]>([]);
   const [isExtracting, setIsExtracting] = useState(false);
+  const [extractProgress, setExtractProgress] = useState(0);
+  const [estimatedExtractMs, setEstimatedExtractMs] = useState(0);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const objectUrlsRef = useRef<Set<string>>(new Set());
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [draggedFileId, setDraggedFileId] = useState<string | null>(null);
   const [dragOverFileId, setDragOverFileId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
@@ -55,6 +59,21 @@ export default function AddRestaurantScreen() {
       objectUrls.clear();
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    };
+  }, []);
+
+  // Climbs toward 90% over the estimated duration and never quite reaches it on its own —
+  // there's no real progress signal from the (non-streaming) extract API, so this is an
+  // honest-feeling approximation rather than a measurement. The caller snaps it to 100 on
+  // actual completion.
+  function progressForElapsed(elapsedMs: number, estimatedMs: number): number {
+    const tau = estimatedMs * 0.6;
+    return Math.min(90, 90 * (1 - Math.exp(-elapsedMs / tau)));
+  }
 
   function addFiles(selected: FileList | File[]) {
     const selectedFiles = Array.from(selected);
@@ -146,13 +165,36 @@ export default function AddRestaurantScreen() {
     moveFileToPosition(draggedId, targetId, position);
   }
 
+  // This is stored locally as a review-screen thumbnail only — the original `file` (full
+  // resolution) is what gets sent to /api/extract, so downscaling here doesn't affect
+  // extraction quality, just how much space the saved preview takes up.
+  const PREVIEW_MAX_DIMENSION = 700;
+  const PREVIEW_JPEG_QUALITY = 0.6;
+
   function readSourcePreview(file: File): Promise<string | null> {
     if (!file.type.startsWith("image/")) return Promise.resolve(null);
     return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(file);
+      const objectUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, PREVIEW_MAX_DIMENSION / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext("2d");
+        URL.revokeObjectURL(objectUrl);
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL("image/jpeg", PREVIEW_JPEG_QUALITY));
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(null);
+      };
+      img.src = objectUrl;
     });
   }
 
@@ -171,6 +213,15 @@ export default function AddRestaurantScreen() {
         : null;
 
     setFiles((prev) => prev.map((f) => ({ ...f, status: "uploading" })));
+
+    const pageCount = files.length;
+    const estimatedMs = estimateExtractionMs(selectedModel, pageCount);
+    setEstimatedExtractMs(estimatedMs);
+    setExtractProgress(0);
+    const startedAt = Date.now();
+    progressIntervalRef.current = setInterval(() => {
+      setExtractProgress(progressForElapsed(Date.now() - startedAt, estimatedMs));
+    }, 100);
 
     let anySucceeded = false;
     try {
@@ -211,11 +262,17 @@ export default function AddRestaurantScreen() {
       }
       anySucceeded = result.items.length > 0;
       setFiles((prev) => prev.map((f) => ({ ...f, status: "done" })));
+      if (anySucceeded) recordExtractionDuration(selectedModel, pageCount, Date.now() - startedAt);
+      setExtractProgress(100);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error.";
       setFiles((prev) => prev.map((f) => ({ ...f, status: "error", error: message })));
     }
 
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
     setIsExtracting(false);
     if (anySucceeded) {
       router.push(`/review/${restaurantId}`);
@@ -425,11 +482,28 @@ export default function AddRestaurantScreen() {
           onClick={handleExtract}
           className="mt-6 w-full rounded-md bg-neutral-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
         >
-          {isExtracting ? "Extracting…" : "Extract menu"}
+          {isExtracting ? `Extracting… ${Math.round(extractProgress)}%` : "Extract menu"}
         </button>
-        <p className="mt-2 text-center text-xs text-neutral-400">
-          Using {getModelOption(selectedModel).label} — change it from the ☰ menu, top right.
-        </p>
+
+        {isExtracting ? (
+          <div className="mt-3">
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-200">
+              <div
+                className="h-full rounded-full bg-neutral-900 transition-[width] duration-150 ease-out"
+                style={{ width: `${extractProgress}%` }}
+              />
+            </div>
+            <p className="mt-1.5 text-center text-xs text-neutral-400">
+              {hasTimingHistory(selectedModel)
+                ? `Usually takes about ${Math.round(estimatedExtractMs / 1000)}s for ${files.length} page${files.length === 1 ? "" : "s"} with ${getModelOption(selectedModel).label}.`
+                : `First run with ${getModelOption(selectedModel).label} — estimating ~${Math.round(estimatedExtractMs / 1000)}s.`}
+            </p>
+          </div>
+        ) : (
+          <p className="mt-2 text-center text-xs text-neutral-400">
+            Using {getModelOption(selectedModel).label} — change it from the ☰ menu, top right.
+          </p>
+        )}
       </section>
 
       <section className="mt-6 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-6">

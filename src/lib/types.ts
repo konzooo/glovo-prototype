@@ -18,8 +18,6 @@ export type Item = {
   menuId: string; // logical menu/batch this item belongs to
   sourcePageLabel?: string | null; // e.g. "Page 1" from the ordered upload list
   sourceFileName?: string | null;
-  sourcePreviewUrl?: string | null; // local data URL for a source menu image preview
-  sourceMimeType?: string | null;
   name: string | null;
   section: string | null;
   description: string | null;

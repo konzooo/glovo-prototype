@@ -17,9 +17,6 @@ import { Item, SourcePage } from "@/lib/types";
 type PendingNavigation = { type: "href"; href: string } | { type: "browser-back" };
 type SaveMessage = { text: string; tone: "success" | "error" };
 
-const LOCAL_PROGRESS_BACKUP_KEY_PREFIX = "glovo-menu-progress-backup:";
-const LOCAL_PROGRESS_BACKUP_META_KEY_PREFIX = "glovo-menu-progress-backup-meta:";
-
 function tabClass(active: boolean, variant: "neutral" | "blue" | "dashed" = "neutral") {
   return [
     "rounded-t-md border px-3 py-1.5 text-sm font-medium",
@@ -35,16 +32,52 @@ function tabClass(active: boolean, variant: "neutral" | "blue" | "dashed" = "neu
 }
 
 function FieldLegend() {
+  const [collapsed, setCollapsed] = useState(false);
   return (
-    <div className="flex flex-col items-end gap-1 text-xs text-neutral-500">
-      <span className="flex items-center gap-2">
-        <span className="h-2.5 w-4 shrink-0 border-2 border-red-400 bg-white" aria-hidden="true" />
-        missing
-      </span>
-      <span className="flex items-center gap-2">
-        <span className="h-2.5 w-4 shrink-0 border-2 border-amber-400 bg-white" aria-hidden="true" />
-        AI generated, needs approval
-      </span>
+    <div className="ml-auto w-fit rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex w-full items-center justify-between gap-3 text-sm text-neutral-700"
+      >
+        <span className="underline">Instructions</span>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className={`h-4 w-4 shrink-0 text-neutral-400 transition-transform ${collapsed ? "" : "rotate-180"}`}
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="2"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {!collapsed && (
+        <div className="mt-2 flex flex-wrap items-start gap-6">
+          <ol className="list-decimal space-y-0.5 pl-5 text-sm text-neutral-700">
+            <li>Check all the menu items</li>
+            <li>
+              Fill manually or <span className="text-[#0ea5e9]">using AI</span>
+            </li>
+            <li>
+              Check <span className="text-amber-500">AI generated fields</span>
+            </li>
+            <li>Approve all items and export</li>
+          </ol>
+          <div className="flex flex-col items-end gap-1 text-xs text-neutral-500">
+            <span className="flex items-center gap-2">
+              <span className="h-2.5 w-4 shrink-0 border-2 border-red-400 bg-white" aria-hidden="true" />
+              missing
+            </span>
+            <span className="flex items-center gap-2">
+              <span className="h-2.5 w-4 shrink-0 border-2 border-amber-400 bg-white" aria-hidden="true" />
+              AI generated, needs approval
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -56,7 +89,6 @@ export default function ReviewScreen() {
 
   const restaurant = useRestaurantStore((s) => s.restaurants.find((r) => r.id === restaurantId));
   const addManualItem = useRestaurantStore((s) => s.addManualItem);
-  const setApproved = useRestaurantStore((s) => s.setApproved);
   const createAiDraft = useRestaurantStore((s) => s.createAiDraft);
   const applyAiPromptResult = useRestaurantStore((s) => s.applyAiPromptResult);
   const discardAiDraft = useRestaurantStore((s) => s.discardAiDraft);
@@ -210,12 +242,6 @@ export default function ReviewScreen() {
 
   const restaurantValue = restaurant;
 
-  function handleBulkApprove() {
-    for (const item of filteredItems) {
-      if (canApprove(item) && !item.approved) setApproved(restaurantValue.id, item.id, true, activeView);
-    }
-  }
-
   function handleExportCsv() {
     const label = activeView === "draft" ? "ai_edit" : "catalog";
     downloadFile(
@@ -240,33 +266,10 @@ export default function ReviewScreen() {
     window.setTimeout(() => setSaveMessage(null), 2500);
   }
 
-  function saveProgressLocally(): boolean {
-    try {
-      const savedAt = new Date().toISOString();
-      window.localStorage.setItem(
-        `${LOCAL_PROGRESS_BACKUP_KEY_PREFIX}${restaurantValue.id}`,
-        exportRestaurantState(restaurantValue)
-      );
-      window.localStorage.setItem(
-        `${LOCAL_PROGRESS_BACKUP_META_KEY_PREFIX}${restaurantValue.id}`,
-        JSON.stringify({ restaurantId: restaurantValue.id, restaurantName: restaurantValue.name, savedAt })
-      );
-      showSaveMessage({ text: "Progress saved locally", tone: "success" });
-      return true;
-    } catch {
-      showSaveMessage({ text: "Could not save locally. Download a progress JSON instead.", tone: "error" });
-      return false;
-    }
-  }
-
   function downloadProgressJson() {
     downloadFile(`${restaurantValue.name.replace(/\s+/g, "_")}_progress.json`, exportRestaurantState(restaurantValue), "application/json");
     setExportMenuOpen(false);
     showSaveMessage({ text: "Progress JSON downloaded", tone: "success" });
-  }
-
-  function handleSaveProgress() {
-    saveProgressLocally();
   }
 
   function leaveReview(navigation: PendingNavigation) {
@@ -282,13 +285,6 @@ export default function ReviewScreen() {
       const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       if (reviewPath && currentPath === reviewPath) router.push("/");
     }, 250);
-  }
-
-  function saveProgressAndLeave() {
-    if (!pendingNavigation) return;
-    const navigation = pendingNavigation;
-    if (!saveProgressLocally()) return;
-    window.setTimeout(() => leaveReview(navigation), 0);
   }
 
   function handleAddItem(section: string | null) {
@@ -352,10 +348,10 @@ export default function ReviewScreen() {
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-8">
-      <div className="flex items-end justify-between gap-3">
-        <Link href="/" className="text-xs text-neutral-400 hover:text-neutral-700">
-          ← All restaurants
-        </Link>
+      <Link href="/" className="text-xs text-neutral-400 hover:text-neutral-700">
+        ← All restaurants
+      </Link>
+      <div className="mt-2 flex">
         <FieldLegend />
       </div>
 
@@ -363,13 +359,6 @@ export default function ReviewScreen() {
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 p-4">
           <h1 className="text-xl font-semibold text-neutral-900">{restaurantValue.name}</h1>
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleSaveProgress}
-              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Save progress
-            </button>
             {saveMessage && (
               <span className={`text-xs font-medium ${saveMessage.tone === "success" ? "text-green-700" : "text-red-600"}`}>
                 {saveMessage.text}
@@ -498,14 +487,6 @@ export default function ReviewScreen() {
           <p className="text-sm text-neutral-500">
             Showing {filteredItems.length} of {counts.total} items
           </p>
-          <button
-            type="button"
-            onClick={handleBulkApprove}
-            disabled={listLocked}
-            className="text-sm font-medium text-neutral-700 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Approve all ready
-          </button>
         </div>
 
         <div className="space-y-6 p-4">
@@ -657,21 +638,14 @@ export default function ReviewScreen() {
             <button
               type="button"
               onClick={() => pendingNavigation && leaveReview(pendingNavigation)}
-              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Leave
-            </button>
-            <button
-              type="button"
-              onClick={saveProgressAndLeave}
               className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
             >
-              Save locally & leave
+              Leave
             </button>
           </>
         }
       >
-        Your edits are stored locally in this browser as you work. Save now to create a local backup before leaving this review.
+        Your edits are saved automatically in this browser as you work.
       </Modal>
     </main>
   );

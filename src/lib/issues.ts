@@ -1,5 +1,7 @@
 import { Item, IssueType } from "./types";
 
+const BLOCKING_ISSUES: IssueType[] = ["missing_name", "missing_price"];
+
 export function getItemIssues(item: Item): IssueType[] {
   const issues: IssueType[] = [];
   if (!item.name || item.name.trim() === "") issues.push("missing_name");
@@ -9,9 +11,14 @@ export function getItemIssues(item: Item): IssueType[] {
   return issues;
 }
 
+// Only name and price block approval. Description (and dietary/image) are informational —
+// shown as issues, but a reviewer can approve and export without them.
+export function getBlockingIssues(item: Item): IssueType[] {
+  return getItemIssues(item).filter((issue) => BLOCKING_ISSUES.includes(issue));
+}
+
 export function canApprove(item: Item): boolean {
-  // Mandatory for this MVP: name, price, and description. Photos are optional for now.
-  return !!item.name?.trim() && item.price?.amount != null && !!item.description?.trim();
+  return getBlockingIssues(item).length === 0;
 }
 
 export function isCatalogReady(item: Item): boolean {

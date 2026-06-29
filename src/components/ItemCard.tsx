@@ -3,7 +3,7 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { Item, ISSUE_LABELS, SourcePage } from "@/lib/types";
 import { useRestaurantStore, ListScope } from "@/lib/store";
-import { getItemIssues, canApprove } from "@/lib/issues";
+import { getItemIssues, getBlockingIssues, canApprove } from "@/lib/issues";
 import { Badge } from "./Badge";
 import { MoveToSectionModal } from "./MoveToSectionModal";
 import { ConfirmDeleteModal } from "./ConfirmDeleteModal";
@@ -273,9 +273,12 @@ export function ItemCard({
   }, [kebabOpen]);
 
   const approvable = canApprove(item);
-  const missingMandatoryIssues = getItemIssues(item).filter((i) => i !== "dietary_inferred");
-  const missingMandatory = missingMandatoryIssues.map((i) => ISSUE_LABELS[i]);
-  const missingNote = missingMandatoryIssues
+  const blockingIssues = getBlockingIssues(item);
+  const blockingLabels = blockingIssues.map((i) => ISSUE_LABELS[i]);
+  // Informational issues (e.g. missing description) still show as a note even once
+  // the item is approvable — they just don't block the Approve button.
+  const noteIssues = getItemIssues(item).filter((i) => i !== "dietary_inferred");
+  const missingNote = noteIssues
     .map((issue) => {
       switch (issue) {
         case "missing_name":
@@ -552,14 +555,14 @@ export function ItemCard({
           </div>
         ) : (
           <div className="flex shrink-0 flex-col items-end gap-1">
-            {!approvable && missingNote && (
+            {missingNote && (
               <span className="max-w-24 text-right text-[10px] leading-tight text-neutral-400">{missingNote}</span>
             )}
             <button
               type="button"
               onClick={() => setApproved(restaurantId, item.id, true, scope)}
               disabled={!approvable}
-              title={!approvable ? `Missing: ${missingMandatory.join(", ")}` : undefined}
+              title={!approvable ? `Missing: ${blockingLabels.join(", ")}` : undefined}
               className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
             >
               Approve

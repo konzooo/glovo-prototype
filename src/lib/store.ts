@@ -20,6 +20,7 @@ export type ListScope = "items" | "draft";
 type RestaurantState = {
   restaurants: Restaurant[];
   hasSeededMocks: boolean;
+  dismissedMockIds: string[];
   ensureMocksSeeded: () => void;
   selectedModel: ModelId;
   setSelectedModel: (id: ModelId) => void;
@@ -28,6 +29,7 @@ type RestaurantState = {
   resetPromptOverride: (id: PromptId) => void;
   createRestaurant: (name: string) => string;
   importRestaurant: (restaurant: Restaurant) => string;
+  removeRestaurant: (restaurantId: string) => void;
   addMenu: (restaurantId: string, name: string, fileName: string) => Menu;
   addExtractedItems: (
     restaurantId: string,
@@ -82,6 +84,7 @@ export const useRestaurantStore = create<RestaurantState>()(
     (set, get) => ({
       restaurants: [],
       hasSeededMocks: false,
+      dismissedMockIds: [],
       selectedModel: DEFAULT_MODEL_ID,
       setSelectedModel: (id) => set({ selectedModel: id }),
       promptOverrides: {},
@@ -101,7 +104,10 @@ export const useRestaurantStore = create<RestaurantState>()(
 
       ensureMocksSeeded: () => {
         const existingIds = new Set(get().restaurants.map((restaurant) => restaurant.id));
-        const missingMocks = SAMPLE_RESTAURANTS.filter((restaurant) => !existingIds.has(restaurant.id));
+        const dismissedIds = new Set(get().dismissedMockIds);
+        const missingMocks = SAMPLE_RESTAURANTS.filter(
+          (restaurant) => !existingIds.has(restaurant.id) && !dismissedIds.has(restaurant.id)
+        );
         if (get().hasSeededMocks && missingMocks.length === 0) return;
         set((state) => ({
           restaurants: [...missingMocks, ...state.restaurants],
@@ -121,6 +127,15 @@ export const useRestaurantStore = create<RestaurantState>()(
         const withFreshId: Restaurant = { ...restaurant, id };
         set((state) => ({ restaurants: [...state.restaurants, withFreshId] }));
         return id;
+      },
+
+      removeRestaurant: (restaurantId) => {
+        set((state) => ({
+          restaurants: state.restaurants.filter((r) => r.id !== restaurantId),
+          dismissedMockIds: SAMPLE_RESTAURANTS.some((r) => r.id === restaurantId)
+            ? [...state.dismissedMockIds, restaurantId]
+            : state.dismissedMockIds,
+        }));
       },
 
       addMenu: (restaurantId, name, fileName) => {
@@ -190,8 +205,6 @@ export const useRestaurantStore = create<RestaurantState>()(
             menuId,
             sourcePageLabel: null,
             sourceFileName: null,
-            sourcePreviewUrl: null,
-            sourceMimeType: null,
             name: "",
             section,
             description: null,
@@ -283,8 +296,6 @@ export const useRestaurantStore = create<RestaurantState>()(
                 menuId: prev?.menuId ?? fallbackMenuId,
                 sourcePageLabel: prev?.sourcePageLabel ?? null,
                 sourceFileName: prev?.sourceFileName ?? null,
-                sourcePreviewUrl: prev?.sourcePreviewUrl ?? null,
-                sourceMimeType: prev?.sourceMimeType ?? null,
                 name: res.name,
                 section: res.section,
                 description: res.description,
