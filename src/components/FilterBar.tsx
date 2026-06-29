@@ -30,7 +30,7 @@ export function FilterBar({
   onChange: (next: Filters) => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-neutral-200 bg-white p-3">
+    <div className="flex flex-wrap items-center gap-2">
       <input
         type="text"
         value={filters.search}

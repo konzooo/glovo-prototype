@@ -3,21 +3,51 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useRestaurantStore } from "@/lib/store";
+import { useRestaurantStore, ListScope } from "@/lib/store";
 import { getItemIssues, canApprove } from "@/lib/issues";
 import { groupBySection, NO_SECTION_LABEL } from "@/lib/grouping";
 import { exportCsv, exportJson, exportRestaurantState, downloadFile } from "@/lib/export";
 import { FilterBar, DEFAULT_FILTERS, Filters } from "@/components/FilterBar";
-import { BatchAiBar } from "@/components/BatchAiBar";
 import { ItemCard } from "@/components/ItemCard";
 import { Modal } from "@/components/Modal";
-import { SourcePage } from "@/lib/types";
+import { BulkEditAiModal } from "@/components/BulkEditAiModal";
+import { AiEditPromptPanel } from "@/components/AiEditPromptPanel";
+import { Item, SourcePage } from "@/lib/types";
 
 type PendingNavigation = { type: "href"; href: string } | { type: "browser-back" };
 type SaveMessage = { text: string; tone: "success" | "error" };
 
 const LOCAL_PROGRESS_BACKUP_KEY_PREFIX = "glovo-menu-progress-backup:";
 const LOCAL_PROGRESS_BACKUP_META_KEY_PREFIX = "glovo-menu-progress-backup-meta:";
+
+function tabClass(active: boolean, variant: "neutral" | "blue" | "dashed" = "neutral") {
+  return [
+    "rounded-t-md border px-3 py-1.5 text-sm font-medium",
+    active && variant === "blue"
+      ? "border-sky-200 border-b-sky-50 bg-sky-50 text-sky-900"
+      : active
+        ? "border-neutral-200 border-b-white bg-white text-neutral-900"
+        : "border-transparent text-neutral-500 hover:text-neutral-900",
+    variant === "dashed" && !active ? "border-dashed border-neutral-300" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function FieldLegend() {
+  return (
+    <div className="flex flex-col items-end gap-1 text-xs text-neutral-500">
+      <span className="flex items-center gap-2">
+        <span className="h-2.5 w-4 shrink-0 border-2 border-red-400 bg-white" aria-hidden="true" />
+        missing
+      </span>
+      <span className="flex items-center gap-2">
+        <span className="h-2.5 w-4 shrink-0 border-2 border-amber-400 bg-white" aria-hidden="true" />
+        AI generated, needs approval
+      </span>
+    </div>
+  );
+}
 
 export default function ReviewScreen() {
   const params = useParams<{ id: string }>();
@@ -27,32 +57,53 @@ export default function ReviewScreen() {
   const restaurant = useRestaurantStore((s) => s.restaurants.find((r) => r.id === restaurantId));
   const addManualItem = useRestaurantStore((s) => s.addManualItem);
   const setApproved = useRestaurantStore((s) => s.setApproved);
+  const createAiDraft = useRestaurantStore((s) => s.createAiDraft);
+  const applyAiPromptResult = useRestaurantStore((s) => s.applyAiPromptResult);
+  const discardAiDraft = useRestaurantStore((s) => s.discardAiDraft);
+  const selectedModel = useRestaurantStore((s) => s.selectedModel);
 
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const [saveMessage, setSaveMessage] = useState<SaveMessage | null>(null);
+  const [requestedView, setActiveView] = useState<ListScope>("items");
+  const [addSectionOpen, setAddSectionOpen] = useState(false);
+  const [newSectionName, setNewSectionName] = useState("");
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [deleteDraftOpen, setDeleteDraftOpen] = useState(false);
+  const [aiEditLoading, setAiEditLoading] = useState(false);
+  const [aiEditError, setAiEditError] = useState<string | null>(null);
+  const [aiEditWarning, setAiEditWarning] = useState<string | null>(null);
   const allowBrowserBackRef = useRef(false);
   const reviewPathRef = useRef<string | null>(null);
   const pushedBackGuardRef = useRef(false);
 
-  const pages = useMemo(() => {
+  // Falls back to "items" if a draft was discarded/promoted while it was active.
+  const activeView: ListScope = requestedView === "draft" && restaurant?.aiDraft ? "draft" : "items";
+  // While a prompt-edit call is in flight it will replace this whole list on success, so
+  // editing is locked here to avoid concurrent changes being silently overwritten.
+  const listLocked = activeView === "draft" && aiEditLoading;
+
+  const activeItems: Item[] = useMemo(() => {
     if (!restaurant) return [];
+    return activeView === "draft" && restaurant.aiDraft ? restaurant.aiDraft.items : restaurant.items;
+  }, [restaurant, activeView]);
+
+  const pages = useMemo(() => {
     const set = new Set<string>();
-    for (const item of restaurant.items) {
+    for (const item of activeItems) {
       if (item.sourcePageLabel) set.add(item.sourcePageLabel);
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }, [restaurant]);
+  }, [activeItems]);
 
   const sections = useMemo(() => {
-    if (!restaurant) return [];
     const set = new Set<string>();
-    for (const item of restaurant.items) {
+    for (const item of activeItems) {
       if (item.section) set.add(item.section);
     }
     return Array.from(set).sort();
-  }, [restaurant]);
+  }, [activeItems]);
 
   const sourcePagesByLabel = useMemo(() => {
     const map = new Map<string, SourcePage>();
@@ -63,9 +114,8 @@ export default function ReviewScreen() {
   }, [restaurant]);
 
   const filteredItems = useMemo(() => {
-    if (!restaurant) return [];
     const search = filters.search.trim().toLowerCase();
-    return restaurant.items.filter((item) => {
+    return activeItems.filter((item) => {
       if (filters.pageLabel !== "all" && item.sourcePageLabel !== filters.pageLabel) return false;
       if (filters.section !== "all" && item.section !== filters.section) return false;
       if (filters.approval === "approved" && !item.approved) return false;
@@ -77,17 +127,16 @@ export default function ReviewScreen() {
       }
       return true;
     });
-  }, [restaurant, filters]);
+  }, [activeItems, filters]);
 
   const sectionGroups = useMemo(() => groupBySection(filteredItems), [filteredItems]);
 
   const counts = useMemo(() => {
-    if (!restaurant) return { total: 0, ready: 0, approved: 0 };
-    const total = restaurant.items.length;
-    const ready = restaurant.items.filter(canApprove).length;
-    const approved = restaurant.items.filter((i) => i.approved).length;
+    const total = activeItems.length;
+    const ready = activeItems.filter(canApprove).length;
+    const approved = activeItems.filter((i) => i.approved).length;
     return { total, ready, approved };
-  }, [restaurant]);
+  }, [activeItems]);
 
   useEffect(() => {
     if (!restaurant) return;
@@ -163,16 +212,26 @@ export default function ReviewScreen() {
 
   function handleBulkApprove() {
     for (const item of filteredItems) {
-      if (canApprove(item) && !item.approved) setApproved(restaurantValue.id, item.id, true);
+      if (canApprove(item) && !item.approved) setApproved(restaurantValue.id, item.id, true, activeView);
     }
   }
 
   function handleExportCsv() {
-    downloadFile(`${restaurantValue.name.replace(/\s+/g, "_")}_catalog.csv`, exportCsv(restaurantValue), "text/csv");
+    const label = activeView === "draft" ? "ai_edit" : "catalog";
+    downloadFile(
+      `${restaurantValue.name.replace(/\s+/g, "_")}_${label}.csv`,
+      exportCsv({ ...restaurantValue, items: activeItems }),
+      "text/csv"
+    );
     setExportMenuOpen(false);
   }
   function handleExportJson() {
-    downloadFile(`${restaurantValue.name.replace(/\s+/g, "_")}_catalog.json`, exportJson(restaurantValue), "application/json");
+    const label = activeView === "draft" ? "ai_edit" : "catalog";
+    downloadFile(
+      `${restaurantValue.name.replace(/\s+/g, "_")}_${label}.json`,
+      exportJson({ ...restaurantValue, items: activeItems }),
+      "application/json"
+    );
     setExportMenuOpen(false);
   }
 
@@ -235,132 +294,352 @@ export default function ReviewScreen() {
   function handleAddItem(section: string | null) {
     const menuId = restaurantValue.menus[0]?.id;
     if (!menuId) return;
-    addManualItem(restaurantValue.id, menuId, section);
+    addManualItem(restaurantValue.id, menuId, section, activeView);
+  }
+
+  async function handleAiEditGenerate(prompt: string) {
+    if (!restaurantValue.aiDraft) return;
+    // Drop focus from whatever's being edited so a still-focused field can't keep
+    // accepting keystrokes once the list below it is locked for the duration of the call.
+    (document.activeElement as HTMLElement | null)?.blur();
+    setAiEditError(null);
+    setAiEditWarning(null);
+    setAiEditLoading(true);
+    const sentCount = restaurantValue.aiDraft.items.length;
+    try {
+      const res = await fetch("/api/edit-draft", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          model: selectedModel,
+          items: restaurantValue.aiDraft.items.map((it) => ({
+            id: it.id,
+            name: it.name,
+            section: it.section,
+            description: it.description,
+            price: it.price,
+            variant_label: it.variant_label,
+            variant_group: it.variant_group,
+            dietary_tags: it.dietary_tags,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to edit the draft.");
+      applyAiPromptResult(restaurantValue.id, prompt, data.items);
+      const receivedCount = Array.isArray(data.items) ? data.items.length : 0;
+      const delta = Math.abs(receivedCount - sentCount);
+      if (sentCount > 0 && delta / sentCount > 0.15) {
+        setAiEditWarning(
+          `Heads up: item count went from ${sentCount} to ${receivedCount} — double-check nothing was dropped or duplicated before approving.`
+        );
+      }
+    } catch (err) {
+      setAiEditError(err instanceof Error ? err.message : "Failed to edit the draft.");
+    } finally {
+      setAiEditLoading(false);
+    }
+  }
+
+  function handleAddSection() {
+    const name = newSectionName.trim();
+    if (!name) return;
+    handleAddItem(name);
+    setNewSectionName("");
+    setAddSectionOpen(false);
   }
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link href="/" className="text-xs text-neutral-400 hover:text-neutral-700">
-            ← All restaurants
-          </Link>
-          <h1 className="mt-1 text-xl font-semibold text-neutral-900">{restaurantValue.name}</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            {counts.total} items · {counts.ready} ready · {counts.approved} approved
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={handleSaveProgress}
-            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-          >
-            Save progress
-          </button>
-          {saveMessage && (
-            <span className={`text-xs font-medium ${saveMessage.tone === "success" ? "text-green-700" : "text-red-600"}`}>
-              {saveMessage.text}
-            </span>
-          )}
-          <div className="relative">
+      <div className="flex items-end justify-between gap-3">
+        <Link href="/" className="text-xs text-neutral-400 hover:text-neutral-700">
+          ← All restaurants
+        </Link>
+        <FieldLegend />
+      </div>
+
+      <div className="mt-2 overflow-hidden rounded-lg border border-neutral-200 bg-white">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 p-4">
+          <h1 className="text-xl font-semibold text-neutral-900">{restaurantValue.name}</h1>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => setExportMenuOpen((v) => !v)}
-              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+              onClick={handleSaveProgress}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
             >
-              Export ▾
+              Save progress
             </button>
-            {exportMenuOpen && (
-              <div className="absolute right-0 top-full z-10 mt-1 w-52 rounded-md border border-neutral-200 bg-white p-1 shadow-lg">
-                <button
-                  type="button"
-                  onClick={handleExportCsv}
-                  className="block w-full rounded px-2 py-1.5 text-left text-sm text-neutral-700 hover:bg-neutral-50"
-                >
-                  Export CSV
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportJson}
-                  className="block w-full rounded px-2 py-1.5 text-left text-sm text-neutral-700 hover:bg-neutral-50"
-                >
-                  Export JSON
-                </button>
-                <button
-                  type="button"
-                  onClick={downloadProgressJson}
-                  className="block w-full rounded px-2 py-1.5 text-left text-sm text-neutral-700 hover:bg-neutral-50"
-                >
-                  Download progress JSON
-                </button>
-              </div>
+            {saveMessage && (
+              <span className={`text-xs font-medium ${saveMessage.tone === "success" ? "text-green-700" : "text-red-600"}`}>
+                {saveMessage.text}
+              </span>
             )}
           </div>
         </div>
-      </div>
 
-      <div className="mt-4">
-        <BatchAiBar />
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-        <FilterBar pages={pages} sections={sections} filters={filters} onChange={setFilters} />
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-neutral-500">
-          Showing {filteredItems.length} of {counts.total} items
-        </p>
-        <button type="button" onClick={handleBulkApprove} className="text-sm font-medium text-neutral-700 hover:text-neutral-900">
-          Approve all ready
-        </button>
-      </div>
-
-      <div className="mt-4 space-y-6">
-        {restaurantValue.items.length === 0 && (
-          <div className="rounded-lg border border-dashed border-neutral-300 bg-white p-8 text-center text-sm text-neutral-400">
-            <p>No items yet.</p>
+        <div className="flex items-center gap-1 border-b border-neutral-200 bg-neutral-50 px-4 pt-2">
+          <button
+            type="button"
+            onClick={() => setActiveView("items")}
+            className={tabClass(activeView === "items")}
+          >
+            Original extraction
+          </button>
+          {restaurantValue.aiDraft ? (
             <button
               type="button"
-              onClick={() => handleAddItem(null)}
-              className="mt-2 text-sm font-medium text-neutral-600 hover:text-neutral-900"
+              onClick={() => setActiveView("draft")}
+              className={tabClass(activeView === "draft", "blue") + " flex items-center gap-2"}
             >
-              + Add item
+              AI draft
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setDeleteDraftOpen(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    setDeleteDraftOpen(true);
+                  }
+                }}
+                className={`rounded-full px-1 ${
+                  activeView === "draft" ? "text-sky-400 hover:bg-sky-100 hover:text-sky-700" : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                }`}
+                aria-label="Delete this draft"
+              >
+                ×
+              </span>
             </button>
-          </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                createAiDraft(restaurantValue.id);
+                setActiveView("draft");
+              }}
+              className={tabClass(false, "dashed")}
+            >
+              + Create duplicate for free AI edit
+            </button>
+          )}
+        </div>
+
+        {activeView === "draft" && restaurantValue.aiDraft && (
+          <AiEditPromptPanel
+            prompts={restaurantValue.aiDraft.prompts}
+            onGenerate={handleAiEditGenerate}
+            isGenerating={aiEditLoading}
+            error={aiEditError}
+            warning={aiEditWarning}
+          />
         )}
-        {restaurantValue.items.length > 0 && sectionGroups.length === 0 && (
-          <p className="rounded-lg border border-dashed border-neutral-300 bg-white p-8 text-center text-sm text-neutral-400">
-            No items match these filters.
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 px-4 py-2">
+          <p className="text-sm text-neutral-500">
+            {counts.total} items · {counts.ready} ready · {counts.approved} approved
           </p>
-        )}
-        {sectionGroups.map((group) => (
-          <div key={group.section ?? "__none__"}>
-            <h2 className="mb-2 border-b border-neutral-200 pb-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-              {group.section ?? NO_SECTION_LABEL}
-            </h2>
-            <div className="space-y-1.5">
-              {group.items.map((item) => (
-                <ItemCard
-                  key={item.id}
-                  restaurantId={restaurantValue.id}
-                  item={item}
-                  sections={sections}
-                  sourcePage={item.sourcePageLabel ? sourcePagesByLabel.get(item.sourcePageLabel) : null}
-                />
-              ))}
-            </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => handleAddItem(group.section)}
-              className="mt-2 text-xs font-medium text-neutral-500 hover:text-neutral-900"
+              onClick={() => setBulkEditOpen(true)}
+              disabled={listLocked}
+              className="flex items-center gap-1.5 rounded-md border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-medium text-[#0284c7] hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              + Add item
+              <span aria-hidden="true">✦</span>
+              Bulk edit with AI
             </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setExportMenuOpen((v) => !v)}
+                className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+              >
+                Export ▾
+              </button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-full z-10 mt-1 w-52 rounded-md border border-neutral-200 bg-white p-1 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={handleExportCsv}
+                    className="block w-full rounded px-2 py-1.5 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+                  >
+                    Export CSV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportJson}
+                    className="block w-full rounded px-2 py-1.5 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+                  >
+                    Export JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadProgressJson}
+                    className="block w-full rounded px-2 py-1.5 text-left text-sm text-neutral-700 hover:bg-neutral-50"
+                  >
+                    Download progress JSON
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        ))}
+        </div>
+
+        <div className="border-b border-neutral-200 p-3">
+          <FilterBar pages={pages} sections={sections} filters={filters} onChange={setFilters} />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 bg-neutral-50 px-4 py-2">
+          <p className="text-sm text-neutral-500">
+            Showing {filteredItems.length} of {counts.total} items
+          </p>
+          <button
+            type="button"
+            onClick={handleBulkApprove}
+            disabled={listLocked}
+            className="text-sm font-medium text-neutral-700 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Approve all ready
+          </button>
+        </div>
+
+        <div className="space-y-6 p-4">
+          {activeItems.length === 0 && (
+            <div className="rounded-lg border border-dashed border-neutral-300 p-8 text-center text-sm text-neutral-400">
+              <p>No items yet.</p>
+              <button
+                type="button"
+                onClick={() => handleAddItem(null)}
+                disabled={listLocked}
+                className="mt-2 text-sm font-medium text-neutral-600 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                + Add item
+              </button>
+            </div>
+          )}
+          {activeItems.length > 0 && sectionGroups.length === 0 && (
+            <p className="rounded-lg border border-dashed border-neutral-300 p-8 text-center text-sm text-neutral-400">
+              No items match these filters.
+            </p>
+          )}
+          {sectionGroups.map((group) => (
+            <div key={group.section ?? "__none__"}>
+              <h2 className="mb-2 border-b border-neutral-200 pb-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                {group.section ?? NO_SECTION_LABEL}
+              </h2>
+              <div className="space-y-1.5">
+                {group.items.map((item) => (
+                  <ItemCard
+                    key={item.id}
+                    restaurantId={restaurantValue.id}
+                    item={item}
+                    sections={sections}
+                    sourcePage={item.sourcePageLabel ? sourcePagesByLabel.get(item.sourcePageLabel) : null}
+                    scope={activeView}
+                    locked={listLocked}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => handleAddItem(group.section)}
+                disabled={listLocked}
+                className="mt-2 text-xs font-medium text-neutral-500 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                + Add item
+              </button>
+            </div>
+          ))}
+
+          <button
+            type="button"
+            onClick={() => setAddSectionOpen(true)}
+            disabled={listLocked}
+            className="text-sm font-medium text-neutral-500 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            + Add section
+          </button>
+        </div>
       </div>
+
+      <Modal
+        open={addSectionOpen}
+        onClose={() => setAddSectionOpen(false)}
+        title="Add section"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setAddSectionOpen(false)}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleAddSection}
+              disabled={!newSectionName.trim()}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Add section
+            </button>
+          </>
+        }
+      >
+        <input
+          type="text"
+          autoFocus
+          value={newSectionName}
+          onChange={(e) => setNewSectionName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleAddSection();
+          }}
+          placeholder="e.g. Drinks"
+          className="w-full rounded-md border border-neutral-300 px-2.5 py-1.5 text-sm focus:border-neutral-500 focus:outline-none"
+        />
+      </Modal>
+
+      <Modal
+        open={deleteDraftOpen}
+        onClose={() => setDeleteDraftOpen(false)}
+        title="Delete this draft?"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setDeleteDraftOpen(false)}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Stay
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                discardAiDraft(restaurantValue.id);
+                setDeleteDraftOpen(false);
+              }}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+            >
+              Confirm
+            </button>
+          </>
+        }
+      >
+        You can always create a new draft from your original extraction.
+      </Modal>
+
+      <BulkEditAiModal
+        open={bulkEditOpen}
+        onClose={() => setBulkEditOpen(false)}
+        restaurantId={restaurantValue.id}
+        scope={activeView}
+        items={activeItems}
+      />
 
       <Modal
         open={pendingNavigation != null}

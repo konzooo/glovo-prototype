@@ -21,8 +21,9 @@ export type SectionGroup = {
   items: Item[];
 };
 
-// Buckets items by section, alphabetically, with a trailing bucket (section: null) for
-// items that have no detected section.
+// Buckets items by section, in the order each section first appears (so the original
+// menu order is preserved, and a section added later — e.g. via "+ Add section" — lands
+// at the end), with a trailing bucket (section: null) for items that have no detected section.
 export function groupBySection(items: Item[]): SectionGroup[] {
   const bySection = new Map<string, Item[]>();
   const noSection: Item[] = [];
@@ -37,9 +38,10 @@ export function groupBySection(items: Item[]): SectionGroup[] {
     else bySection.set(item.section, [item]);
   }
 
-  const groups: SectionGroup[] = Array.from(bySection.keys())
-    .sort((a, b) => a.localeCompare(b))
-    .map((section) => ({ section, items: sortItemsForDisplay(bySection.get(section)!) }));
+  const groups: SectionGroup[] = Array.from(bySection.keys()).map((section) => ({
+    section,
+    items: sortItemsForDisplay(bySection.get(section)!),
+  }));
 
   if (noSection.length > 0) {
     groups.push({ section: null, items: sortItemsForDisplay(noSection) });

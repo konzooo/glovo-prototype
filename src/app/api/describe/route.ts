@@ -12,9 +12,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing 'name'." }, { status: 400 });
     }
     const section = typeof body?.section === "string" ? body.section : null;
+    const mode = body?.mode === "enhance" ? "enhance" : "create";
+    const existingDescription = typeof body?.existingDescription === "string" ? body.existingDescription : null;
+    const systemPrompt = typeof body?.systemPrompt === "string" ? body.systemPrompt : undefined;
 
     const provider = getAiProvider(typeof body?.model === "string" ? body.model : undefined);
-    const description = await provider.generateDescription({ name, section });
+    const description = await provider.generateDescription({ name, section, mode, existingDescription, systemPrompt });
 
     return NextResponse.json({ description });
   } catch (err) {

@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import { Item, Menu, Restaurant, DietaryTag, SourcePage } from "./types";
 import { makeId } from "./id";
 import { ExtractedItem } from "./ai/schema";
+import { EditDraftItem } from "./ai/provider";
 import { SAMPLE_RESTAURANTS } from "./sample-data";
 import { ModelId, DEFAULT_MODEL_ID } from "./ai/models";
 import { PromptId } from "./ai/prompts";
@@ -11,6 +12,10 @@ type PromptOverride = {
   enabled: boolean;
   text: string;
 };
+
+// Item-mutating actions target either the live catalog ("items") or the
+// working copy produced by a prompt edit ("draft"), kept in restaurant.aiDraft.
+export type ListScope = "items" | "draft";
 
 type RestaurantState = {
   restaurants: Restaurant[];
@@ -30,16 +35,19 @@ type RestaurantState = {
     extracted: ExtractedItem[],
     source?: { pageLabel?: string | null; fileName?: string | null; previewUrl?: string | null; mimeType?: string | null }
   ) => void;
-  updateItem: (restaurantId: string, itemId: string, patch: Partial<Item>) => void;
-  addManualItem: (restaurantId: string, menuId: string, section: string | null) => void;
-  removeItem: (restaurantId: string, itemId: string) => void;
-  moveItemToSection: (restaurantId: string, itemId: string, section: string | null) => void;
-  setItemPhoto: (restaurantId: string, itemId: string, photoUrl: string | null) => void;
-  setApproved: (restaurantId: string, itemId: string, approved: boolean) => void;
-  applyAiDescription: (restaurantId: string, itemId: string, description: string) => void;
-  acceptAiDescription: (restaurantId: string, itemId: string) => void;
-  addInferredDietaryTag: (restaurantId: string, itemId: string, tag: DietaryTag) => void;
-  removeDietaryTag: (restaurantId: string, itemId: string, index: number) => void;
+  updateItem: (restaurantId: string, itemId: string, patch: Partial<Item>, scope?: ListScope) => void;
+  addManualItem: (restaurantId: string, menuId: string, section: string | null, scope?: ListScope) => void;
+  removeItem: (restaurantId: string, itemId: string, scope?: ListScope) => void;
+  moveItemToSection: (restaurantId: string, itemId: string, section: string | null, scope?: ListScope) => void;
+  setItemPhoto: (restaurantId: string, itemId: string, photoUrl: string | null, scope?: ListScope) => void;
+  setApproved: (restaurantId: string, itemId: string, approved: boolean, scope?: ListScope) => void;
+  applyAiDescription: (restaurantId: string, itemId: string, description: string, scope?: ListScope) => void;
+  acceptAiDescription: (restaurantId: string, itemId: string, scope?: ListScope) => void;
+  addInferredDietaryTag: (restaurantId: string, itemId: string, tag: DietaryTag, scope?: ListScope) => void;
+  removeDietaryTag: (restaurantId: string, itemId: string, index: number, scope?: ListScope) => void;
+  createAiDraft: (restaurantId: string) => void;
+  applyAiPromptResult: (restaurantId: string, prompt: string, resultItems: EditDraftItem[]) => void;
+  discardAiDraft: (restaurantId: string) => void;
 };
 
 function updateRestaurant(
@@ -50,8 +58,23 @@ function updateRestaurant(
   return restaurants.map((r) => (r.id === restaurantId ? fn(r) : r));
 }
 
-function updateItemIn(restaurant: Restaurant, itemId: string, fn: (it: Item) => Item): Restaurant {
-  return { ...restaurant, items: restaurant.items.map((it) => (it.id === itemId ? fn(it) : it)) };
+function getScopedItems(restaurant: Restaurant, scope: ListScope): Item[] {
+  return scope === "draft" ? restaurant.aiDraft?.items ?? [] : restaurant.items;
+}
+
+function withScopedItems(restaurant: Restaurant, scope: ListScope, items: Item[]): Restaurant {
+  if (scope === "draft") {
+    return restaurant.aiDraft ? { ...restaurant, aiDraft: { ...restaurant.aiDraft, items } } : restaurant;
+  }
+  return { ...restaurant, items };
+}
+
+function updateItemIn(restaurant: Restaurant, scope: ListScope, itemId: string, fn: (it: Item) => Item): Restaurant {
+  return withScopedItems(
+    restaurant,
+    scope,
+    getScopedItems(restaurant, scope).map((it) => (it.id === itemId ? fn(it) : it))
+  );
 }
 
 export const useRestaurantStore = create<RestaurantState>()(
@@ -153,14 +176,14 @@ export const useRestaurantStore = create<RestaurantState>()(
         }));
       },
 
-      updateItem: (restaurantId, itemId, patch) =>
+      updateItem: (restaurantId, itemId, patch, scope = "items") =>
         set((state) => ({
           restaurants: updateRestaurant(state.restaurants, restaurantId, (r) =>
-            updateItemIn(r, itemId, (it) => ({ ...it, ...patch }))
+            updateItemIn(r, scope, itemId, (it) => ({ ...it, ...patch }))
           ),
         })),
 
-      addManualItem: (restaurantId, menuId, section) =>
+      addManualItem: (restaurantId, menuId, section, scope = "items") =>
         set((state) => {
           const item: Item = {
             id: makeId("item"),
@@ -183,49 +206,112 @@ export const useRestaurantStore = create<RestaurantState>()(
             approved: false,
           };
           return {
-            restaurants: updateRestaurant(state.restaurants, restaurantId, (r) => ({
-              ...r,
-              items: [...r.items, item],
-            })),
+            restaurants: updateRestaurant(state.restaurants, restaurantId, (r) =>
+              withScopedItems(r, scope, [...getScopedItems(r, scope), item])
+            ),
           };
         }),
 
-      removeItem: (restaurantId, itemId) =>
-        set((state) => ({
-          restaurants: updateRestaurant(state.restaurants, restaurantId, (r) => ({
-            ...r,
-            items: r.items.filter((it) => it.id !== itemId),
-          })),
-        })),
-
-      moveItemToSection: (restaurantId, itemId, section) => get().updateItem(restaurantId, itemId, { section }),
-
-      setItemPhoto: (restaurantId, itemId, photoUrl) =>
-        get().updateItem(restaurantId, itemId, { photoUrl, has_photo: photoUrl != null ? true : null }),
-
-      setApproved: (restaurantId, itemId, approved) => get().updateItem(restaurantId, itemId, { approved }),
-
-      applyAiDescription: (restaurantId, itemId, description) =>
-        get().updateItem(restaurantId, itemId, { description, description_is_ai_draft: true }),
-
-      acceptAiDescription: (restaurantId, itemId) =>
-        get().updateItem(restaurantId, itemId, { description_is_ai_draft: false }),
-
-      addInferredDietaryTag: (restaurantId, itemId, tag) =>
+      removeItem: (restaurantId, itemId, scope = "items") =>
         set((state) => ({
           restaurants: updateRestaurant(state.restaurants, restaurantId, (r) =>
-            updateItemIn(r, itemId, (it) => ({ ...it, dietary_tags: [...it.dietary_tags, tag] }))
+            withScopedItems(r, scope, getScopedItems(r, scope).filter((it) => it.id !== itemId))
           ),
         })),
 
-      removeDietaryTag: (restaurantId, itemId, index) =>
+      moveItemToSection: (restaurantId, itemId, section, scope = "items") =>
+        get().updateItem(restaurantId, itemId, { section }, scope),
+
+      setItemPhoto: (restaurantId, itemId, photoUrl, scope = "items") =>
+        get().updateItem(restaurantId, itemId, { photoUrl, has_photo: photoUrl != null ? true : null }, scope),
+
+      setApproved: (restaurantId, itemId, approved, scope = "items") =>
+        get().updateItem(restaurantId, itemId, { approved }, scope),
+
+      // Resets "approved" — an AI-touched field needs a human look again before it can ship.
+      applyAiDescription: (restaurantId, itemId, description, scope = "items") =>
+        get().updateItem(restaurantId, itemId, { description, description_is_ai_draft: true, approved: false }, scope),
+
+      acceptAiDescription: (restaurantId, itemId, scope = "items") =>
+        get().updateItem(restaurantId, itemId, { description_is_ai_draft: false }, scope),
+
+      addInferredDietaryTag: (restaurantId, itemId, tag, scope = "items") =>
         set((state) => ({
           restaurants: updateRestaurant(state.restaurants, restaurantId, (r) =>
-            updateItemIn(r, itemId, (it) => ({
+            updateItemIn(r, scope, itemId, (it) => ({ ...it, dietary_tags: [...it.dietary_tags, tag] }))
+          ),
+        })),
+
+      removeDietaryTag: (restaurantId, itemId, index, scope = "items") =>
+        set((state) => ({
+          restaurants: updateRestaurant(state.restaurants, restaurantId, (r) =>
+            updateItemIn(r, scope, itemId, (it) => ({
               ...it,
               dietary_tags: it.dietary_tags.filter((_, i) => i !== index),
             }))
           ),
+        })),
+
+      createAiDraft: (restaurantId) =>
+        set((state) => ({
+          restaurants: updateRestaurant(state.restaurants, restaurantId, (r) =>
+            r.aiDraft
+              ? r
+              : {
+                  ...r,
+                  aiDraft: {
+                    prompts: [],
+                    items: r.items.map((it) => ({ ...it, dietary_tags: [...it.dietary_tags] })),
+                  },
+                }
+          ),
+        })),
+
+      // Every item in the result comes back unapproved: a structural edit can shift an
+      // item's meaning (new section, merged variant, etc.) even when its own fields
+      // look unchanged, so the whole draft needs a fresh human look before re-approving.
+      applyAiPromptResult: (restaurantId, prompt, resultItems) =>
+        set((state) => ({
+          restaurants: updateRestaurant(state.restaurants, restaurantId, (r) => {
+            const prevItems = r.aiDraft?.items ?? r.items;
+            const prevById = new Map(prevItems.map((it) => [it.id, it]));
+            const fallbackMenuId = r.menus[0]?.id ?? prevItems[0]?.menuId ?? "";
+            const items: Item[] = resultItems.map((res) => {
+              const prev = res.id ? prevById.get(res.id) : undefined;
+              return {
+                id: prev?.id ?? makeId("item"),
+                menuId: prev?.menuId ?? fallbackMenuId,
+                sourcePageLabel: prev?.sourcePageLabel ?? null,
+                sourceFileName: prev?.sourceFileName ?? null,
+                sourcePreviewUrl: prev?.sourcePreviewUrl ?? null,
+                sourceMimeType: prev?.sourceMimeType ?? null,
+                name: res.name,
+                section: res.section,
+                description: res.description,
+                price: res.price,
+                variant_label: res.variant_label,
+                variant_group: res.variant_group,
+                dietary_tags: res.dietary_tags,
+                has_photo: prev?.has_photo ?? null,
+                photoUrl: prev?.photoUrl ?? null,
+                confidence: prev?.confidence ?? null,
+                description_is_ai_draft: prev?.description_is_ai_draft ?? false,
+                approved: false,
+              };
+            });
+            return {
+              ...r,
+              aiDraft: {
+                prompts: [...(r.aiDraft?.prompts ?? []), prompt],
+                items,
+              },
+            };
+          }),
+        })),
+
+      discardAiDraft: (restaurantId) =>
+        set((state) => ({
+          restaurants: updateRestaurant(state.restaurants, restaurantId, (r) => ({ ...r, aiDraft: null })),
         })),
     }),
     { name: "glovo-menu-onboarding-v2" }

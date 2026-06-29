@@ -17,6 +17,7 @@ export const SAMPLE_EXTRACTION: ExtractionResponse = {
       dietary_tags: [{ label: "Vegetarian", evidence: "'V' marker next to item; legend: V = Vegetarian" }],
       has_photo: true,
       confidence: 0.93,
+      source_page_index: null,
     },
     {
       name: "Margherita Pizza",
@@ -28,6 +29,7 @@ export const SAMPLE_EXTRACTION: ExtractionResponse = {
       dietary_tags: [{ label: "Vegetarian", evidence: "'V' marker next to item; legend: V = Vegetarian" }],
       has_photo: false,
       confidence: 0.93,
+      source_page_index: null,
     },
     {
       name: "Pepperoni Pizza",
@@ -39,6 +41,7 @@ export const SAMPLE_EXTRACTION: ExtractionResponse = {
       dietary_tags: [],
       has_photo: false,
       confidence: 0.91,
+      source_page_index: null,
     },
     {
       name: "Pepperoni Pizza",
@@ -50,6 +53,7 @@ export const SAMPLE_EXTRACTION: ExtractionResponse = {
       dietary_tags: [],
       has_photo: false,
       confidence: 0.91,
+      source_page_index: null,
     },
     {
       name: "Garlic Bread",
@@ -61,6 +65,7 @@ export const SAMPLE_EXTRACTION: ExtractionResponse = {
       dietary_tags: [{ label: "Vegetarian", evidence: "'V' marker next to item; legend: V = Vegetarian" }],
       has_photo: true,
       confidence: 0.95,
+      source_page_index: null,
     },
     {
       name: "Tiramisu",
@@ -72,6 +77,7 @@ export const SAMPLE_EXTRACTION: ExtractionResponse = {
       dietary_tags: [],
       has_photo: false,
       confidence: 0.55,
+      source_page_index: null,
     },
   ],
 };

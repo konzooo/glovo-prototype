@@ -2,7 +2,7 @@
 
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { Item, ISSUE_LABELS, SourcePage } from "@/lib/types";
-import { useRestaurantStore } from "@/lib/store";
+import { useRestaurantStore, ListScope } from "@/lib/store";
 import { getItemIssues, canApprove } from "@/lib/issues";
 import { Badge } from "./Badge";
 import { MoveToSectionModal } from "./MoveToSectionModal";
@@ -15,18 +15,21 @@ function AiTextButton({
   title,
   children,
   className = "",
+  disabled = false,
 }: {
   onClick: () => void;
   title: string;
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
-      className={`inline-flex shrink-0 items-center gap-1 text-xs font-semibold italic text-[#0ea5e9] hover:text-[#0284c7] ${className}`}
+      disabled={disabled}
+      className={`inline-flex shrink-0 items-center gap-1 text-xs font-semibold italic text-[#0ea5e9] hover:text-[#0284c7] disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     >
       <span aria-hidden="true" className="text-[11px]">
         ✦
@@ -36,8 +39,12 @@ function AiTextButton({
   );
 }
 
-const fieldBorder = (missing: boolean) =>
-  missing ? "border-red-300 ring-1 ring-red-200" : "border-neutral-200 focus:border-neutral-400";
+const fieldBorder = (missing: boolean, aiDraft = false) =>
+  missing
+    ? "border-red-300 ring-1 ring-red-200"
+    : aiDraft
+      ? "border-amber-300 ring-1 ring-amber-200"
+      : "border-neutral-200 focus:border-neutral-400";
 
 function AddImageIcon({ className = "" }: { className?: string }) {
   return (
@@ -221,11 +228,17 @@ export function ItemCard({
   item,
   sections,
   sourcePage,
+  scope,
+  locked = false,
 }: {
   restaurantId: string;
   item: Item;
   sections: string[];
   sourcePage?: SourcePage | null;
+  scope: ListScope;
+  // True while a whole-list AI operation (e.g. prompt edit) on this scope is in flight —
+  // disables editing here so concurrent changes can't be silently lost when it replaces the list.
+  locked?: boolean;
 }) {
   const updateItem = useRestaurantStore((s) => s.updateItem);
   const removeItem = useRestaurantStore((s) => s.removeItem);
@@ -234,14 +247,17 @@ export function ItemCard({
   const setItemPhoto = useRestaurantStore((s) => s.setItemPhoto);
   const addInferredDietaryTag = useRestaurantStore((s) => s.addInferredDietaryTag);
   const removeDietaryTag = useRestaurantStore((s) => s.removeDietaryTag);
+  const applyAiDescription = useRestaurantStore((s) => s.applyAiDescription);
+  const selectedModel = useRestaurantStore((s) => s.selectedModel);
 
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
   const [kebabOpen, setKebabOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [descAiOpen, setDescAiOpen] = useState(false);
   const [dietAiOpen, setDietAiOpen] = useState(false);
   const [newTagLabel, setNewTagLabel] = useState("");
+  const [descAiLoading, setDescAiLoading] = useState(false);
+  const [descAiError, setDescAiError] = useState<string | null>(null);
 
   const kebabRef = useRef<HTMLDivElement>(null);
 
@@ -277,16 +293,52 @@ export function ItemCard({
 
   function addManualTag() {
     if (!newTagLabel.trim()) return;
-    addInferredDietaryTag(restaurantId, item.id, {
-      label: newTagLabel.trim(),
-      source: "stated",
-      evidence: "Added by reviewer",
-    });
+    addInferredDietaryTag(
+      restaurantId,
+      item.id,
+      {
+        label: newTagLabel.trim(),
+        source: "stated",
+        evidence: "Added by reviewer",
+      },
+      scope
+    );
     setNewTagLabel("");
   }
 
+  async function handleDescriptionAi() {
+    const mode = item.description?.trim() ? "enhance" : "create";
+    setDescAiError(null);
+    setDescAiLoading(true);
+    try {
+      const res = await fetch("/api/describe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: item.name ?? "",
+          section: item.section,
+          mode,
+          existingDescription: item.description,
+          model: selectedModel,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to generate description.");
+      applyAiDescription(restaurantId, item.id, data.description, scope);
+    } catch (err) {
+      setDescAiError(err instanceof Error ? err.message : "Failed to generate description.");
+    } finally {
+      setDescAiLoading(false);
+    }
+  }
+
   return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-stretch gap-3 rounded-md border border-neutral-200 bg-white px-3 py-3">
+    <div
+      className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-stretch gap-3 rounded-md border border-neutral-200 bg-white px-3 py-3 ${
+        locked ? "pointer-events-none opacity-60" : ""
+      }`}
+      aria-disabled={locked || undefined}
+    >
       {/* Thumbnail */}
       <div className="relative shrink-0">
         <button
@@ -312,7 +364,7 @@ export function ItemCard({
               <input
                 type="text"
                 value={item.name ?? ""}
-                onChange={(e) => updateItem(restaurantId, item.id, { name: e.target.value })}
+                onChange={(e) => updateItem(restaurantId, item.id, { name: e.target.value }, scope)}
                 placeholder="Item name"
                 title={item.confidence != null ? `${Math.round(item.confidence * 100)}% extraction confidence` : undefined}
                 className={`w-full min-w-0 rounded-md border px-2 py-1 text-sm font-semibold text-neutral-900 focus:outline-none ${fieldBorder(
@@ -323,7 +375,7 @@ export function ItemCard({
                 <input
                   type="text"
                   value={item.variant_label ?? ""}
-                  onChange={(e) => updateItem(restaurantId, item.id, { variant_label: e.target.value || null })}
+                  onChange={(e) => updateItem(restaurantId, item.id, { variant_label: e.target.value || null }, scope)}
                   placeholder="Variant"
                   className="w-20 shrink-0 rounded-md border border-neutral-200 px-1.5 py-1 text-xs text-neutral-600 focus:border-neutral-400 focus:outline-none"
                 />
@@ -342,9 +394,12 @@ export function ItemCard({
                 value={item.price?.amount ?? ""}
                 onChange={(e) => {
                   const raw = e.target.value;
-                  updateItem(restaurantId, item.id, {
-                    price: raw === "" ? null : { amount: Number(raw), currency: item.price?.currency ?? "EUR" },
-                  });
+                  updateItem(
+                    restaurantId,
+                    item.id,
+                    { price: raw === "" ? null : { amount: Number(raw), currency: item.price?.currency ?? "EUR" } },
+                    scope
+                  );
                 }}
                 placeholder="0.00"
                 className="w-14 text-right text-sm focus:outline-none"
@@ -353,9 +408,12 @@ export function ItemCard({
                 type="text"
                 value={item.price?.currency ?? ""}
                 onChange={(e) =>
-                  updateItem(restaurantId, item.id, {
-                    price: { amount: item.price?.amount ?? null, currency: e.target.value || null },
-                  })
+                  updateItem(
+                    restaurantId,
+                    item.id,
+                    { price: { amount: item.price?.amount ?? null, currency: e.target.value || null } },
+                    scope
+                  )
                 }
                 placeholder="EUR"
                 className="w-10 text-xs text-neutral-500 focus:outline-none"
@@ -378,7 +436,7 @@ export function ItemCard({
                   {tag.label}
                   <button
                     type="button"
-                    onClick={() => removeDietaryTag(restaurantId, item.id, i)}
+                    onClick={() => removeDietaryTag(restaurantId, item.id, i, scope)}
                     className="opacity-60 hover:opacity-100"
                   >
                     ×
@@ -423,20 +481,28 @@ export function ItemCard({
         <div className="relative w-full max-w-5xl">
           <textarea
             value={item.description ?? ""}
-            onChange={(e) => updateItem(restaurantId, item.id, { description: e.target.value, description_is_ai_draft: false })}
+            onChange={(e) =>
+              updateItem(restaurantId, item.id, { description: e.target.value, description_is_ai_draft: false }, scope)
+            }
             placeholder="Description"
             rows={2}
+            disabled={descAiLoading}
             className={`min-h-14 w-full resize-none rounded-md border px-2 py-1.5 pr-32 text-xs leading-5 focus:outline-none ${fieldBorder(
-              !item.description?.trim()
+              !item.description?.trim(),
+              item.description_is_ai_draft
             )}`}
           />
           <AiTextButton
-            onClick={() => setDescAiOpen(true)}
-            title="AI description assist"
+            onClick={handleDescriptionAi}
+            disabled={descAiLoading}
+            title={`Sends the item name${item.section ? " and section" : ""}${
+              item.description?.trim() ? " plus the current description" : ""
+            } to the AI to ${item.description?.trim() ? "enhance" : "write"} a description.`}
             className="absolute bottom-2 right-2"
           >
-            {item.description?.trim() ? "Enhance with AI" : "Create with AI"}
+            {descAiLoading ? "Generating…" : item.description?.trim() ? "Enhance with AI" : "Create with AI"}
           </AiTextButton>
+          {descAiError && <p className="mt-1 text-xs text-red-600">{descAiError}</p>}
         </div>
       </div>
 
@@ -476,7 +542,11 @@ export function ItemCard({
         {item.approved ? (
           <div className="flex shrink-0 items-center gap-1.5">
             <Badge tone="green">Approved</Badge>
-            <button type="button" onClick={() => setApproved(restaurantId, item.id, false)} className="text-xs text-neutral-400 hover:underline">
+            <button
+              type="button"
+              onClick={() => setApproved(restaurantId, item.id, false, scope)}
+              className="text-xs text-neutral-400 hover:underline"
+            >
               Undo
             </button>
           </div>
@@ -487,7 +557,7 @@ export function ItemCard({
             )}
             <button
               type="button"
-              onClick={() => setApproved(restaurantId, item.id, true)}
+              onClick={() => setApproved(restaurantId, item.id, true, scope)}
               disabled={!approvable}
               title={!approvable ? `Missing: ${missingMandatory.join(", ")}` : undefined}
               className="rounded-md bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
@@ -503,19 +573,13 @@ export function ItemCard({
         onClose={() => setMoveOpen(false)}
         sections={sections}
         currentSection={item.section}
-        onConfirm={(section) => moveItemToSection(restaurantId, item.id, section)}
+        onConfirm={(section) => moveItemToSection(restaurantId, item.id, section, scope)}
       />
       <ConfirmDeleteModal
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
         itemName={item.name ?? ""}
-        onConfirm={() => removeItem(restaurantId, item.id)}
-      />
-      <ComingSoonModal
-        open={descAiOpen}
-        onClose={() => setDescAiOpen(false)}
-        title="AI description assist"
-        description="Generate or enhance this item's description with AI, for you to review before it's saved. Coming soon."
+        onConfirm={() => removeItem(restaurantId, item.id, scope)}
       />
       <ComingSoonModal
         open={dietAiOpen}
@@ -526,7 +590,7 @@ export function ItemCard({
       <PhotoModal
         open={photoModalOpen}
         onClose={() => setPhotoModalOpen(false)}
-        onPhoto={(photoUrl) => setItemPhoto(restaurantId, item.id, photoUrl)}
+        onPhoto={(photoUrl) => setItemPhoto(restaurantId, item.id, photoUrl, scope)}
       />
     </div>
   );

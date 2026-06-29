@@ -170,35 +170,50 @@ export default function AddRestaurantScreen() {
         ? extractionPromptOverride.text.trim()
         : null;
 
-    let anySucceeded = false;
+    setFiles((prev) => prev.map((f) => ({ ...f, status: "uploading" })));
 
-    for (const [index, pending] of files.entries()) {
-      const pageLabel = `Page ${index + 1}`;
-      setFiles((prev) => prev.map((f) => (f.id === pending.id ? { ...f, status: "uploading" } : f)));
-      try {
-        const sourcePreviewUrl = await readSourcePreview(pending.file);
-        const formData = new FormData();
-        formData.append("file", pending.file);
-        formData.append("model", selectedModel);
-        if (customExtractionPrompt) formData.append("systemPrompt", customExtractionPrompt);
-        const res = await fetch("/api/extract", { method: "POST", body: formData });
-        const json = await res.json();
-        if (!res.ok) {
-          throw new Error(json?.error || `Extraction failed (${res.status})`);
-        }
-        const result = json as ExtractionResponse;
-        addExtractedItems(restaurantId, menu.id, result.items, {
-          pageLabel,
+    let anySucceeded = false;
+    try {
+      const pageMeta = await Promise.all(
+        files.map(async (pending) => ({
+          pending,
+          previewUrl: await readSourcePreview(pending.file),
+        }))
+      );
+
+      const formData = new FormData();
+      for (const { pending } of pageMeta) formData.append("file", pending.file);
+      formData.append("model", selectedModel);
+      if (customExtractionPrompt) formData.append("systemPrompt", customExtractionPrompt);
+
+      const res = await fetch("/api/extract", { method: "POST", body: formData });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json?.error || `Extraction failed (${res.status})`);
+      }
+      const result = json as ExtractionResponse;
+
+      // Items come back tagged with source_page_index (1-based, matching upload order),
+      // so we can still attribute each item to its source page/photo for the review UI
+      // even though all pages were extracted in one model call.
+      for (const [index, { pending, previewUrl }] of pageMeta.entries()) {
+        const pageNumber = index + 1;
+        const itemsForPage = result.items.filter((item) =>
+          pageMeta.length === 1 ? true : (item.source_page_index ?? 1) === pageNumber
+        );
+        if (itemsForPage.length === 0) continue;
+        addExtractedItems(restaurantId, menu.id, itemsForPage, {
+          pageLabel: `Page ${pageNumber}`,
           fileName: pending.file.name,
-          previewUrl: sourcePreviewUrl,
+          previewUrl,
           mimeType: pending.file.type || null,
         });
-        anySucceeded = true;
-        setFiles((prev) => prev.map((f) => (f.id === pending.id ? { ...f, status: "done" } : f)));
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unknown error.";
-        setFiles((prev) => prev.map((f) => (f.id === pending.id ? { ...f, status: "error", error: message } : f)));
       }
+      anySucceeded = result.items.length > 0;
+      setFiles((prev) => prev.map((f) => ({ ...f, status: "done" })));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error.";
+      setFiles((prev) => prev.map((f) => ({ ...f, status: "error", error: message })));
     }
 
     setIsExtracting(false);
@@ -206,7 +221,7 @@ export default function AddRestaurantScreen() {
       router.push(`/review/${restaurantId}`);
     } else {
       setGlobalError(
-        "No pages were extracted successfully. The restaurant was still saved (with no items yet) — check the errors below, or find it in the restaurant list to try again."
+        "Extraction failed. The restaurant was still saved (with no items yet) — check the error below, or find it in the restaurant list to try again."
       );
     }
   }

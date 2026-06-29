@@ -48,12 +48,21 @@ export type SourcePage = {
   mimeType: string | null;
 };
 
+// A working copy of the catalog produced by free-text "edit the whole doc" prompts,
+// kept separate from `items` until the reviewer discards or promotes it. `prompts`
+// is the running history of requests applied to this draft so far (chat-like).
+export type AiDraft = {
+  prompts: string[];
+  items: Item[];
+};
+
 export type Restaurant = {
   id: string;
   name: string;
   menus: Menu[];
   sourcePages?: SourcePage[];
   items: Item[];
+  aiDraft?: AiDraft | null;
 };
 
 export type IssueType =
