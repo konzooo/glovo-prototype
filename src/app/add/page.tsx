@@ -7,9 +7,9 @@ import { useRestaurantStore } from "@/lib/store";
 import { parseRestaurantState } from "@/lib/export";
 import { makeId } from "@/lib/id";
 import { ExtractionResponse } from "@/lib/ai/schema";
-import { SAMPLE_EXTRACTION } from "@/lib/sample-extraction";
 import { getModelOption } from "@/lib/ai/models";
 import { estimateExtractionMs, hasTimingHistory, recordExtractionDuration } from "@/lib/extraction-timing";
+import { OFFLINE_SAMPLE_MENUS, OfflineSampleMenu } from "@/lib/offline-samples";
 
 type PendingFile = {
   id: string;
@@ -49,6 +49,8 @@ export default function AddRestaurantScreen() {
   const [dragOverFileId, setDragOverFileId] = useState<string | null>(null);
   const [dragOverPosition, setDragOverPosition] = useState<"before" | "after" | null>(null);
   const [previewFileId, setPreviewFileId] = useState<string | null>(null);
+  const [sampleMenuOpen, setSampleMenuOpen] = useState(false);
+  const [sampleExtractingId, setSampleExtractingId] = useState<string | null>(null);
 
   useEffect(() => {
     const objectUrls = objectUrlsRef.current;
@@ -300,14 +302,21 @@ export default function AddRestaurantScreen() {
     }
   }
 
-  function handleUseSampleMenu() {
-    const id = createRestaurant(restaurantName.trim() || "Sample Pizzeria (test)");
-    const menu = addMenu(id, "Main menu", "sample-pizzeria-menu.json");
-    addExtractedItems(id, menu.id, SAMPLE_EXTRACTION.items, {
-      pageLabel: "Page 1",
-      fileName: "sample-pizzeria-menu.json",
-    });
-    router.push(`/review/${id}`);
+  function handleUseSampleMenu(sample: OfflineSampleMenu) {
+    setSampleExtractingId(sample.id);
+    window.setTimeout(() => {
+      const id = createRestaurant(sample.restaurantName);
+      const menu = addMenu(id, sample.menuName, sample.fileName);
+      addExtractedItems(id, menu.id, sample.extraction.items, {
+        pageLabel: "Page 1",
+        fileName: sample.fileName,
+        previewUrl: sample.imageUrl,
+        mimeType: "image/png",
+      });
+      setSampleExtractingId(null);
+      setSampleMenuOpen(false);
+      router.push(`/review/${id}`);
+    }, 900);
   }
 
   return (
@@ -511,17 +520,17 @@ export default function AddRestaurantScreen() {
       <section className="mt-6 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-6">
         <h2 className="text-sm font-semibold text-neutral-700">Testing without API key?</h2>
         <p className="mt-1 text-sm text-neutral-500">
-          Use a sample menu to test the upload → extract → review flow without calling the LLM — it&apos;s a
-          previously-extracted menu, kept as a fixed JSON. Or import a previously exported restaurant JSON file to
-          pick up where you left off.
+          Try the upload → extract → review flow without calling the LLM. Pick a real menu image and we&apos;ll
+          replay its pre-extracted JSON so it feels like a live extraction. Or import a previously exported
+          restaurant JSON file to pick up where you left off.
         </p>
         <div className="mt-3 flex gap-3">
           <button
             type="button"
-            onClick={handleUseSampleMenu}
+            onClick={() => setSampleMenuOpen(true)}
             className="rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-100"
           >
-            Use sample menu
+            Choose test menu
           </button>
           <button
             type="button"
@@ -542,6 +551,59 @@ export default function AddRestaurantScreen() {
           />
         </div>
       </section>
+
+      <Modal
+        open={sampleMenuOpen}
+        onClose={() => {
+          if (!sampleExtractingId) setSampleMenuOpen(false);
+        }}
+        title="Choose a test menu"
+        size="lg"
+        footer={
+          <button
+            type="button"
+            onClick={() => setSampleMenuOpen(false)}
+            disabled={sampleExtractingId !== null}
+            className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+          >
+            Close
+          </button>
+        }
+      >
+        <div className="grid gap-4 md:grid-cols-2">
+          {OFFLINE_SAMPLE_MENUS.map((sample) => {
+            const isExtractingSample = sampleExtractingId === sample.id;
+            const anyExtracting = sampleExtractingId !== null;
+            return (
+              <article key={sample.id} className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+                <div className="aspect-[4/3] overflow-hidden bg-neutral-100">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={sample.imageUrl} alt="" className="h-full w-full object-cover" />
+                </div>
+                <div className="p-4">
+                  <h3 className="text-sm font-semibold text-neutral-900">{sample.restaurantName}</h3>
+                  <p className="mt-1 min-h-10 text-sm text-neutral-500">{sample.description}</p>
+                  <p className="mt-2 text-xs text-neutral-400">
+                    {sample.extraction.items.length} extracted items
+                    {sample.extraction.legend ? " · legend detected" : ""}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => handleUseSampleMenu(sample)}
+                    disabled={anyExtracting}
+                    className="mt-3 w-full rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
+                  >
+                    {isExtractingSample ? "Extracting sample…" : "Test"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+        <p className="mt-3 text-xs text-neutral-400">
+          These samples use fixed, pre-extracted JSON captured from the shown images, so no API key is required.
+        </p>
+      </Modal>
 
       <Modal
         open={previewFile != null}
