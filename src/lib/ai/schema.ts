@@ -37,7 +37,7 @@ export const EXTRACTED_ITEM_SCHEMA = {
     dietary_tags: {
       type: "array",
       description:
-        "Dietary or allergen markers VISIBLY STATED on the menu only (e.g. a 'V', 'GF', '(vegan)', or numeric allergen code next to the item, matched against a legend elsewhere on the menu). Do not infer. Empty array if none are stated.",
+        "Dietary or allergen markers VISIBLY STATED on the menu only (e.g. letter codes, numeric footnotes, icons/symbols, superscripts, or inline labels next to the item, matched against a legend elsewhere on the menu). Do not infer. Empty array if none are stated.",
       items: {
         type: "object",
         properties: {
@@ -87,7 +87,7 @@ export const EXTRACTION_RESPONSE_SCHEMA = {
     legend: {
       type: ["string", "null"],
       description:
-        "The dietary/allergen marker legend as printed on the menu, verbatim if found (e.g. 'V = Vegetarian, GF = Gluten-Free' or '1 Egg, 13 Gluten'). Null if no legend is present.",
+        "The dietary/allergen marker legend as printed on the menu, verbatim if found (e.g. 'V = Vegetarian, GF = Gluten-Free', '1 Egg, 13 Gluten', or icon/symbol explanations). Null if no legend is present.",
     },
     items: {
       type: "array",
@@ -192,10 +192,10 @@ export const BATCH_DESCRIPTION_RESPONSE_SCHEMA = {
 export const EXTRACTION_SYSTEM_PROMPT = `You are extracting structured menu data from a restaurant menu for a food-delivery catalog. You may be given a single page or multiple pages (images and/or PDFs) that together make up one menu, in reading order.
 
 Follow this process:
-1. First scan ALL pages, including small footer text, for a dietary/allergen-marker LEGEND (e.g. "V = Vegetarian, GF = Gluten-Free" or numbered allergen codes like "1 Egg, 13 Gluten") — it may appear on any page, not necessarily the first. Record it verbatim in "legend" if present, else null. The same legend applies across all pages unless a later page clearly defines its own.
+1. First scan ALL pages, including small footer text, sidebars, headers, icon keys, and multilingual notes, for a dietary/allergen-marker LEGEND — it may appear on any page, not necessarily the first. Legends can use letter codes (V, VG, GF, DF), numeric footnotes (1, 5, 13), icons/symbols, superscripts, colors, or words such as "allergens", "contains", "food allergies", "vegan", "vegetarian", or "gluten-free". Record the legend verbatim in "legend" if present, else null. The same legend applies across all pages unless a later page clearly defines its own.
 2. Walk through every section and every item across all pages, top to bottom, left to right, in the order the pages were given. If a section started on one page clearly continues onto the next (same heading, or items obviously continuing the same list), treat it as ONE section, not two.
 3. For each item, fill in only what is VISIBLY PRESENT on the menu. If a field is unclear, ambiguous, or absent, set it to null and lower "confidence" — never guess or invent a value.
-4. Dietary/allergen tags: include a tag only if the item visibly carries a marker that matches the legend (e.g. "(1. 5. 13.)" after an item where the footer legend maps 1=Egg, 5=Dairy, 13=Gluten) or an unambiguous printed label like "(vegan)" next to the item. Use positive labels such as "Vegetarian", "Vegan", "Contains egg", "Contains dairy", or "Contains gluten". Record the exact evidence. If there is no legend and no per-item marker, return an empty dietary_tags array — absence of a marker is NEVER evidence the dish is free of that allergen/diet, so do not tag it either way. Never infer dietary properties from the dish name or ingredients you assume it has.
+4. Dietary/allergen tags: include a tag only if the item visibly carries a marker that matches the legend (e.g. "(1. 5. 13.)", "1,5,13", a superscript number, a V/GF/VG code, or an icon next to the item) or an unambiguous printed label like "(vegan)" next to the item. Use positive labels such as "Vegetarian", "Vegan", "Gluten-free", "Contains egg", "Contains dairy", or "Contains gluten". Record the exact evidence, including the item marker and legend mapping. If a marker is ambiguous, too far from the item, or not defined by a legend, leave dietary_tags empty for that item and lower confidence. If there is no legend and no per-item marker, return an empty dietary_tags array — absence of a marker is NEVER evidence the dish is free of that allergen/diet, so do not tag it either way. Never infer dietary properties from the dish name or ingredients you assume it has.
 5. Variants: if a single dish is offered in multiple sizes/portions/configurations with different prices (e.g. "Margherita - Small $8 / Large $14", a Subway sandwich offered as "6 inch" / "Footlong", or tapas offered as "½ ración" / "ración"), emit ONE item row PER VARIANT, even if the variants are printed on different pages. Each row gets its own variant_label (e.g. "Small", "Footlong", "½ ración") and price, and all rows for that dish share the same variant_group (typically the base dish name). If a dish has only one price/size, leave variant_label and variant_group null.
 6. Ignore decorative/branding tiles, headers, and images that are not actual menu items (e.g. a logo or a "Fresh Fit" banner).
 7. Use the same process and judgment regardless of menu layout (clean grid, dense list, scattered photo-led layout, multilingual) — do not special-case any particular menu.
