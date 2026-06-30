@@ -5,6 +5,11 @@ export type MenuFile = {
   base64Data: string;
 };
 
+export type PromptImageFile = {
+  mediaType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
+  base64Data: string;
+};
+
 // All pages are sent to the model in a single call (rather than one call per page) so it
 // can dedupe sections/variants split across a page break, and so we pay for one extraction
 // pass instead of N. Order matters: it's the page order shown to the model, and
@@ -70,6 +75,7 @@ export type EditDraftItem = {
 export type EditDraftInput = {
   items: EditDraftItem[];
   instruction: string;
+  referenceImages?: PromptImageFile[];
   systemPrompt?: string;
 };
 

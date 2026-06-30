@@ -122,6 +122,13 @@ export class ClaudeProvider implements AiProvider {
 
   async editDraft(input: EditDraftInput): Promise<EditDraftItem[]> {
     const client = getClient();
+    const imageBlocks: Anthropic.Messages.ContentBlockParam[] = (input.referenceImages ?? []).flatMap((file, index) => [
+      { type: "text" as const, text: `Reference image ${index + 1}:` },
+      {
+        type: "image" as const,
+        source: { type: "base64" as const, media_type: file.mediaType, data: file.base64Data },
+      },
+    ]);
     const response = await client.messages.create({
       model: this.model,
       max_tokens: 8000,
@@ -131,7 +138,13 @@ export class ClaudeProvider implements AiProvider {
       messages: [
         {
           role: "user",
-          content: `Instruction: ${input.instruction}\n\nCurrent items:\n${JSON.stringify(input.items)}`,
+          content: [
+            {
+              type: "text",
+              text: `Instruction: ${input.instruction}\n\nCurrent items:\n${JSON.stringify(input.items)}`,
+            },
+            ...imageBlocks,
+          ],
         },
       ],
     });

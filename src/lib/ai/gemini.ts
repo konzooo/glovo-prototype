@@ -153,7 +153,18 @@ export class GeminiProvider implements AiProvider {
     const ai = getClient();
     const response = await ai.models.generateContent({
       model: this.model,
-      contents: `Instruction: ${input.instruction}\n\nCurrent items:\n${JSON.stringify(input.items)}`,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: `Instruction: ${input.instruction}\n\nCurrent items:\n${JSON.stringify(input.items)}` },
+            ...(input.referenceImages ?? []).flatMap((file, index) => [
+              { text: `Reference image ${index + 1}:` },
+              { inlineData: { mimeType: file.mediaType, data: file.base64Data } },
+            ]),
+          ],
+        },
+      ],
       config: {
         systemInstruction: input.systemPrompt?.trim() || EDIT_DRAFT_SYSTEM_PROMPT,
         responseMimeType: "application/json",

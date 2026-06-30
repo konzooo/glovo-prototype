@@ -329,7 +329,7 @@ export default function ReviewScreen() {
     addManualItem(restaurantValue.id, menuId, section, activeView);
   }
 
-  async function handleAiEditGenerate(prompt: string) {
+  async function handleAiEditGenerate(prompt: string, referenceImages: File[]) {
     if (!restaurantValue.aiDraft) return;
     // Drop focus from whatever's being edited so a still-focused field can't keep
     // accepting keystrokes once the list below it is locked for the duration of the call.
@@ -338,24 +338,26 @@ export default function ReviewScreen() {
     setAiEditWarning(null);
     setAiEditLoading(true);
     const sentCount = restaurantValue.aiDraft.items.length;
+    const editableItems = restaurantValue.aiDraft.items.map((it) => ({
+      id: it.id,
+      name: it.name,
+      section: it.section,
+      description: it.description,
+      price: it.price,
+      variant_label: it.variant_label,
+      variant_group: it.variant_group,
+      dietary_tags: it.dietary_tags,
+    }));
     try {
+      const formData = new FormData();
+      formData.append("prompt", prompt);
+      formData.append("model", selectedModel);
+      formData.append("items", JSON.stringify(editableItems));
+      for (const image of referenceImages) formData.append("image", image);
+
       const res = await fetch("/api/edit-draft", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          model: selectedModel,
-          items: restaurantValue.aiDraft.items.map((it) => ({
-            id: it.id,
-            name: it.name,
-            section: it.section,
-            description: it.description,
-            price: it.price,
-            variant_label: it.variant_label,
-            variant_group: it.variant_group,
-            dietary_tags: it.dietary_tags,
-          })),
-        }),
+        body: formData,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Failed to edit the draft.");
