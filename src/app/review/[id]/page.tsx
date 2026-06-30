@@ -37,7 +37,7 @@ function tabClass(active: boolean, variant: "neutral" | "blue" | "dashed" = "neu
 function FieldLegend() {
   const [collapsed, setCollapsed] = useState(false);
   return (
-    <div className="ml-auto w-fit rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
+    <div className="ml-auto max-w-full rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
@@ -58,21 +58,24 @@ function FieldLegend() {
         </svg>
       </button>
       {!collapsed && (
-        <div className="mt-2 flex flex-wrap items-start gap-6">
-          <ol className="list-decimal space-y-0.5 pl-5 text-sm text-neutral-700">
-            <li>Check all the menu items</li>
-            <li>
+        <div className="mt-2 flex flex-wrap items-start gap-4">
+          <ol start={0} className="list-decimal space-y-0.5 pl-4 text-sm text-neutral-700">
+            <li className="whitespace-nowrap">
+              Extraction shows all menu items and marks <span className="font-medium text-red-600">missing</span> fields
+            </li>
+            <li className="whitespace-nowrap">Check all the menu items</li>
+            <li className="whitespace-nowrap">
               Fill manually or <span className="text-[#0ea5e9]">using AI</span>
             </li>
-            <li>
+            <li className="whitespace-nowrap">
               Check <span className="text-amber-500">AI generated fields</span>
             </li>
-            <li>Approve all items and export</li>
+            <li className="whitespace-nowrap">Approve all items and export</li>
           </ol>
           <div className="flex flex-col items-end gap-1 text-xs text-neutral-500">
             <span className="flex items-center gap-2">
               <span className="h-2.5 w-4 shrink-0 border-2 border-red-400 bg-white" aria-hidden="true" />
-              missing
+              <span className="font-medium text-red-600">missing</span>
             </span>
             <span className="flex items-center gap-2">
               <span className="h-2.5 w-4 shrink-0 border-2 border-amber-400 bg-white" aria-hidden="true" />

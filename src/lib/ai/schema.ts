@@ -3,7 +3,7 @@
 // rules live in the UI layer (lib/issues.ts), never here.
 //
 // IMPORTANT: dietary_tags returned here are ALWAYS source:"stated". The model only reports
-// markers visibly present on the menu (after reading the legend); it must never infer.
+// dietary/allergen markers visibly present on the menu (after reading the legend); it must never infer.
 // Inference is a separate, later, human-triggered action (see app/api/infer-dietary).
 
 export const EXTRACTED_ITEM_SCHEMA = {
@@ -37,14 +37,15 @@ export const EXTRACTED_ITEM_SCHEMA = {
     dietary_tags: {
       type: "array",
       description:
-        "Dietary markers VISIBLY STATED on the menu only (e.g. a 'V' or 'GF' symbol next to the item, matched against a legend elsewhere on the menu). Do not infer. Empty array if none are stated.",
+        "Dietary or allergen markers VISIBLY STATED on the menu only (e.g. a 'V', 'GF', '(vegan)', or numeric allergen code next to the item, matched against a legend elsewhere on the menu). Do not infer. Empty array if none are stated.",
       items: {
         type: "object",
         properties: {
-          label: { type: "string", description: "e.g. 'Vegetarian', 'Gluten-free', 'Vegan'." },
+          label: { type: "string", description: "e.g. 'Vegetarian', 'Gluten-free', 'Vegan', 'Contains egg', 'Contains gluten'." },
           evidence: {
             type: ["string", "null"],
-            description: "What you saw and where, e.g. \"'V' marker next to item name; legend says V = Vegetarian\".",
+            description:
+              "What you saw and where, e.g. \"'V' marker next to item name; legend says V = Vegetarian\" or \"'(1. 13.)' after price; footer legend says 1 = Egg, 13 = Gluten\".",
           },
         },
         required: ["label", "evidence"],
@@ -86,7 +87,7 @@ export const EXTRACTION_RESPONSE_SCHEMA = {
     legend: {
       type: ["string", "null"],
       description:
-        "The dietary-marker legend as printed on the menu, verbatim if found (e.g. 'V = Vegetarian, GF = Gluten-Free'). Null if no legend is present.",
+        "The dietary/allergen marker legend as printed on the menu, verbatim if found (e.g. 'V = Vegetarian, GF = Gluten-Free' or '1 Egg, 13 Gluten'). Null if no legend is present.",
     },
     items: {
       type: "array",
@@ -191,10 +192,10 @@ export const BATCH_DESCRIPTION_RESPONSE_SCHEMA = {
 export const EXTRACTION_SYSTEM_PROMPT = `You are extracting structured menu data from a restaurant menu for a food-delivery catalog. You may be given a single page or multiple pages (images and/or PDFs) that together make up one menu, in reading order.
 
 Follow this process:
-1. First scan ALL pages for a dietary-marker LEGEND (e.g. "V = Vegetarian, GF = Gluten-Free") — it may appear on any page, not necessarily the first. Record it verbatim in "legend" if present, else null. The same legend applies across all pages unless a later page clearly defines its own.
+1. First scan ALL pages, including small footer text, for a dietary/allergen-marker LEGEND (e.g. "V = Vegetarian, GF = Gluten-Free" or numbered allergen codes like "1 Egg, 13 Gluten") — it may appear on any page, not necessarily the first. Record it verbatim in "legend" if present, else null. The same legend applies across all pages unless a later page clearly defines its own.
 2. Walk through every section and every item across all pages, top to bottom, left to right, in the order the pages were given. If a section started on one page clearly continues onto the next (same heading, or items obviously continuing the same list), treat it as ONE section, not two.
 3. For each item, fill in only what is VISIBLY PRESENT on the menu. If a field is unclear, ambiguous, or absent, set it to null and lower "confidence" — never guess or invent a value.
-4. Dietary tags: only include a tag if the item visibly carries a marker that matches the legend (or an unambiguous label like "(vegan)" printed next to it). Record the evidence. If there is no legend and no per-item marker, return an empty dietary_tags array — absence of a marker is NEVER evidence the dish is free of that allergen/diet, so do not tag it either way. Never infer dietary properties from the dish name or ingredients you assume it has.
+4. Dietary/allergen tags: include a tag only if the item visibly carries a marker that matches the legend (e.g. "(1. 5. 13.)" after an item where the footer legend maps 1=Egg, 5=Dairy, 13=Gluten) or an unambiguous printed label like "(vegan)" next to the item. Use positive labels such as "Vegetarian", "Vegan", "Contains egg", "Contains dairy", or "Contains gluten". Record the exact evidence. If there is no legend and no per-item marker, return an empty dietary_tags array — absence of a marker is NEVER evidence the dish is free of that allergen/diet, so do not tag it either way. Never infer dietary properties from the dish name or ingredients you assume it has.
 5. Variants: if a single dish is offered in multiple sizes/portions/configurations with different prices (e.g. "Margherita - Small $8 / Large $14", a Subway sandwich offered as "6 inch" / "Footlong", or tapas offered as "½ ración" / "ración"), emit ONE item row PER VARIANT, even if the variants are printed on different pages. Each row gets its own variant_label (e.g. "Small", "Footlong", "½ ración") and price, and all rows for that dish share the same variant_group (typically the base dish name). If a dish has only one price/size, leave variant_label and variant_group null.
 6. Ignore decorative/branding tiles, headers, and images that are not actual menu items (e.g. a logo or a "Fresh Fit" banner).
 7. Use the same process and judgment regardless of menu layout (clean grid, dense list, scattered photo-led layout, multilingual) — do not special-case any particular menu.

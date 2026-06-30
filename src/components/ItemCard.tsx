@@ -556,7 +556,7 @@ export function ItemCard({
         ) : (
           <div className="flex shrink-0 flex-col items-end gap-1">
             {missingNote && (
-              <span className="max-w-24 text-right text-[10px] leading-tight text-neutral-400">{missingNote}</span>
+              <span className="max-w-24 text-right text-[10px] font-medium leading-tight text-red-500">{missingNote}</span>
             )}
             <button
               type="button"

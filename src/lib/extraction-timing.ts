@@ -4,8 +4,9 @@
 
 const STORAGE_KEY = "glovo-menu-extraction-timings-v1";
 const MAX_SAMPLES_PER_MODEL = 20;
-const DEFAULT_SECONDS_PER_PAGE = 7;
-const MIN_ESTIMATE_MS = 5000;
+const DEFAULT_FIRST_PAGE_MS = 30000;
+const DEFAULT_EXTRA_PAGE_MS = 10000;
+const MIN_ESTIMATE_MS = 20000;
 
 type TimingSample = { pages: number; durationMs: number };
 type TimingStore = Record<string, TimingSample[]>;
@@ -41,13 +42,14 @@ export function hasTimingHistory(modelId: string): boolean {
   return (readStore()[modelId]?.length ?? 0) > 0;
 }
 
-// Average seconds-per-page from this model's past runs, falling back to a flat
-// assumption until enough real extractions have been recorded.
+// Average seconds-per-page from this model's past runs, falling back to a conservative
+// non-streaming-call estimate until enough real extractions have been recorded.
 export function estimateExtractionMs(modelId: string, pages: number): number {
+  const normalizedPages = Math.max(1, pages);
   const samples = readStore()[modelId] ?? [];
   const perPageMs =
     samples.length > 0
       ? samples.reduce((sum, s) => sum + s.durationMs / s.pages, 0) / samples.length
-      : DEFAULT_SECONDS_PER_PAGE * 1000;
-  return Math.max(MIN_ESTIMATE_MS, Math.round(perPageMs * Math.max(1, pages)));
+      : (DEFAULT_FIRST_PAGE_MS + DEFAULT_EXTRA_PAGE_MS * (normalizedPages - 1)) / normalizedPages;
+  return Math.max(MIN_ESTIMATE_MS, Math.round(perPageMs * normalizedPages));
 }

@@ -66,13 +66,14 @@ export default function AddRestaurantScreen() {
     };
   }, []);
 
-  // Climbs toward 90% over the estimated duration and never quite reaches it on its own —
+  // Climbs toward a near-complete state over a deliberately padded estimate —
   // there's no real progress signal from the (non-streaming) extract API, so this is an
   // honest-feeling approximation rather than a measurement. The caller snaps it to 100 on
   // actual completion.
   function progressForElapsed(elapsedMs: number, estimatedMs: number): number {
-    const tau = estimatedMs * 0.6;
-    return Math.min(90, 90 * (1 - Math.exp(-elapsedMs / tau)));
+    const paddedEstimate = Math.max(estimatedMs * 1.25, 1);
+    const ratio = Math.min(1, elapsedMs / paddedEstimate);
+    return Math.min(88, 88 * ratio);
   }
 
   function addFiles(selected: FileList | File[]) {
@@ -482,7 +483,7 @@ export default function AddRestaurantScreen() {
           onClick={handleExtract}
           className="mt-6 w-full rounded-md bg-neutral-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
         >
-          {isExtracting ? `Extracting… ${Math.round(extractProgress)}%` : "Extract menu"}
+          {isExtracting ? "Extracting menu…" : "Extract menu"}
         </button>
 
         {isExtracting ? (
@@ -497,6 +498,7 @@ export default function AddRestaurantScreen() {
               {hasTimingHistory(selectedModel)
                 ? `Usually takes about ${Math.round(estimatedExtractMs / 1000)}s for ${files.length} page${files.length === 1 ? "" : "s"} with ${getModelOption(selectedModel).label}.`
                 : `First run with ${getModelOption(selectedModel).label} — estimating ~${Math.round(estimatedExtractMs / 1000)}s.`}
+              {extractProgress >= 88 ? " Still extracting; final response can take a little longer." : ""}
             </p>
           </div>
         ) : (
