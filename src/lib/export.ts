@@ -11,7 +11,6 @@ export type ExportRow = {
   variant_label: string | null;
   variant_group: string | null;
   dietary_tags: string; // "Vegetarian (stated); Gluten-free (inferred)"
-  has_photo: boolean | null;
 };
 
 export function toExportRows(items: Item[]): ExportRow[] {
@@ -26,7 +25,6 @@ export function toExportRows(items: Item[]): ExportRow[] {
       variant_label: it.variant_label,
       variant_group: it.variant_group,
       dietary_tags: it.dietary_tags.map((t) => `${t.label} (${t.source})`).join("; "),
-      has_photo: it.has_photo,
     }));
 }
 
@@ -49,7 +47,6 @@ export function exportCsv(restaurant: Restaurant): string {
     "variant_label",
     "variant_group",
     "dietary_tags",
-    "has_photo",
   ];
   const escape = (val: unknown) => {
     if (val == null) return "";

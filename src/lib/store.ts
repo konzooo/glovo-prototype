@@ -20,6 +20,8 @@ export type ListScope = "items" | "draft";
 type RestaurantState = {
   restaurants: Restaurant[];
   hasSeededMocks: boolean;
+  // Kept under the original persisted key so existing browsers remember seed
+  // restaurants that were deleted and do not quietly bring them back.
   dismissedMockIds: string[];
   ensureMocksSeeded: () => void;
   selectedModel: ModelId;
@@ -132,9 +134,9 @@ export const useRestaurantStore = create<RestaurantState>()(
       removeRestaurant: (restaurantId) => {
         set((state) => ({
           restaurants: state.restaurants.filter((r) => r.id !== restaurantId),
-          dismissedMockIds: SAMPLE_RESTAURANTS.some((r) => r.id === restaurantId)
-            ? [...state.dismissedMockIds, restaurantId]
-            : state.dismissedMockIds,
+          dismissedMockIds: state.dismissedMockIds.includes(restaurantId)
+            ? state.dismissedMockIds
+            : [...state.dismissedMockIds, restaurantId],
         }));
       },
 

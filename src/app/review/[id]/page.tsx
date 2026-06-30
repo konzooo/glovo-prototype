@@ -17,6 +17,9 @@ import { Item, SourcePage } from "@/lib/types";
 type PendingNavigation = { type: "href"; href: string } | { type: "browser-back" };
 type SaveMessage = { text: string; tone: "success" | "error" };
 
+const LOCAL_PROGRESS_BACKUP_KEY_PREFIX = "glovo-menu-progress-backup:";
+const LOCAL_PROGRESS_BACKUP_META_KEY_PREFIX = "glovo-menu-progress-backup-meta:";
+
 function tabClass(active: boolean, variant: "neutral" | "blue" | "dashed" = "neutral") {
   return [
     "rounded-t-md border px-3 py-1.5 text-sm font-medium",
@@ -266,10 +269,33 @@ export default function ReviewScreen() {
     window.setTimeout(() => setSaveMessage(null), 2500);
   }
 
+  function saveProgressLocally(): boolean {
+    try {
+      const savedAt = new Date().toISOString();
+      window.localStorage.setItem(
+        `${LOCAL_PROGRESS_BACKUP_KEY_PREFIX}${restaurantValue.id}`,
+        exportRestaurantState(restaurantValue)
+      );
+      window.localStorage.setItem(
+        `${LOCAL_PROGRESS_BACKUP_META_KEY_PREFIX}${restaurantValue.id}`,
+        JSON.stringify({ restaurantId: restaurantValue.id, restaurantName: restaurantValue.name, savedAt })
+      );
+      showSaveMessage({ text: "Progress saved locally", tone: "success" });
+      return true;
+    } catch {
+      showSaveMessage({ text: "Could not save locally. Download a progress JSON instead.", tone: "error" });
+      return false;
+    }
+  }
+
   function downloadProgressJson() {
     downloadFile(`${restaurantValue.name.replace(/\s+/g, "_")}_progress.json`, exportRestaurantState(restaurantValue), "application/json");
     setExportMenuOpen(false);
     showSaveMessage({ text: "Progress JSON downloaded", tone: "success" });
+  }
+
+  function handleSaveProgress() {
+    saveProgressLocally();
   }
 
   function leaveReview(navigation: PendingNavigation) {
@@ -285,6 +311,13 @@ export default function ReviewScreen() {
       const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
       if (reviewPath && currentPath === reviewPath) router.push("/");
     }, 250);
+  }
+
+  function saveProgressAndLeave() {
+    if (!pendingNavigation) return;
+    const navigation = pendingNavigation;
+    if (!saveProgressLocally()) return;
+    window.setTimeout(() => leaveReview(navigation), 0);
   }
 
   function handleAddItem(section: string | null) {
@@ -359,6 +392,13 @@ export default function ReviewScreen() {
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 p-4">
           <h1 className="text-xl font-semibold text-neutral-900">{restaurantValue.name}</h1>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSaveProgress}
+              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Save progress
+            </button>
             {saveMessage && (
               <span className={`text-xs font-medium ${saveMessage.tone === "success" ? "text-green-700" : "text-red-600"}`}>
                 {saveMessage.text}
@@ -638,14 +678,21 @@ export default function ReviewScreen() {
             <button
               type="button"
               onClick={() => pendingNavigation && leaveReview(pendingNavigation)}
-              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
             >
               Leave
+            </button>
+            <button
+              type="button"
+              onClick={saveProgressAndLeave}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700"
+            >
+              Save locally & leave
             </button>
           </>
         }
       >
-        Your edits are saved automatically in this browser as you work.
+        Your edits are stored locally in this browser as you work. Save now to create a local backup before leaving this review.
       </Modal>
     </main>
   );
