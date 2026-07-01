@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAiProvider } from "@/lib/ai";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"]);
 

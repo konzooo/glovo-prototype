@@ -241,9 +241,20 @@ export default function AddRestaurantScreen() {
       if (customExtractionPrompt) formData.append("systemPrompt", customExtractionPrompt);
 
       const res = await fetch("/api/extract", { method: "POST", body: formData });
-      const json = await res.json();
+      const responseText = await res.text();
+      let json: { error?: string } | ExtractionResponse | null = null;
+      try {
+        json = responseText ? (JSON.parse(responseText) as { error?: string } | ExtractionResponse) : null;
+      } catch {
+        const fallback = responseText.trim() || `Extraction failed (${res.status}).`;
+        throw new Error(fallback.length > 240 ? `${fallback.slice(0, 240)}…` : fallback);
+      }
+      const errorMessage = json && "error" in json ? json.error : undefined;
       if (!res.ok) {
-        throw new Error(json?.error || `Extraction failed (${res.status})`);
+        throw new Error(errorMessage || `Extraction failed (${res.status})`);
+      }
+      if (!json || !("items" in json) || !Array.isArray(json.items)) {
+        throw new Error("Extraction returned an unexpected response.");
       }
       const result = json as ExtractionResponse;
 

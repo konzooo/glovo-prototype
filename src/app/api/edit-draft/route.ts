@@ -3,7 +3,7 @@ import { getAiProvider } from "@/lib/ai";
 import { EditDraftItem, PromptImageFile } from "@/lib/ai/provider";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 const MAX_REFERENCE_IMAGES = 4;
